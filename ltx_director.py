@@ -1,30 +1,27 @@
-import logging
-import json
 import base64
 import io as _io
+import json
+import logging
 import math
+import os
 
+import av
+import comfy.model_management
+import folder_paths
 import numpy as np
 import torch
 import torch.nn.functional as F
-import av
+from comfy_api.latest import io
 from PIL import Image
 
-import os
-import folder_paths
-import comfy.model_management
-
-from comfy_api.latest import io
-
+from .patches import apply_patches, detect_model_type
 from .prompt_relay import (
-    get_raw_tokenizer,
-    map_token_indices,
     build_segments,
     create_mask_fn,
     distribute_segment_lengths,
-)
-
-from .patches import detect_model_type, apply_patches
+    get_raw_tokenizer,
+    map_token_indices,
+    )
 
 log = logging.getLogger(__name__)
 
@@ -36,7 +33,9 @@ def _load_image_tensor(seg: dict) -> torch.Tensor:
     """Decode an image from the ComfyUI input folder (if imageFile provided) or fallback to base64
     to a ComfyUI-style image tensor of shape [1, H, W, 3], float32 in [0, 1]."""
     if seg.get("imageFile"):
-        file_path = os.path.join(folder_paths.get_input_directory(), seg["imageFile"])
+        file_path = os.path.join(
+                folder_paths.get_input_directory(), seg["imageFile"],
+                )
         if os.path.exists(file_path):
             img = Image.open(file_path).convert("RGB")
             arr = np.array(img, dtype=np.float32) / 255.0
@@ -48,7 +47,7 @@ def _load_image_tensor(seg: dict) -> torch.Tensor:
 
     if "," in b64_str:
         b64_str = b64_str.split(",", 1)[1]
-    
+
     try:
         img_bytes = base64.b64decode(b64_str)
         img = Image.open(_io.BytesIO(img_bytes)).convert("RGB")
@@ -57,60 +56,82 @@ def _load_image_tensor(seg: dict) -> torch.Tensor:
     except:
         return torch.zeros((1, 512, 512, 3), dtype=torch.float32)
 
+
 def _load_video_tensor(seg: dict, frame_rate: float) -> torch.Tensor:
     """Extracts a sequence of frames from a video file based on the segment's trim parameters,
     and returns them as an [N, H, W, 3] float32 tensor."""
-    file_path = os.path.join(folder_paths.get_input_directory(), seg.get("imageFile", ""))
-    
+    file_path = os.path.join(
+            folder_paths.get_input_directory(), seg.get("imageFile", ""),
+            )
+
     if not os.path.exists(file_path):
         return torch.zeros((1, 512, 512, 3), dtype=torch.float32)
 
     trim_start_frames = float(seg.get("trimStart", 0))
     length_frames = float(seg.get("length", 1))
     start_sec = trim_start_frames / frame_rate
-    
+
     frames = []
     try:
         with av.open(file_path) as container:
             stream = container.streams.video[0]
             stream.thread_type = "AUTO"
-            
+
             # Seek slightly before target to hit a keyframe
             if stream.time_base:
-                seek_pts = int((max(0, start_sec - 0.5)) / float(stream.time_base))
+                seek_pts = int(
+                        (max(0, start_sec - 0.5)) / float(stream.time_base),
+                        )
             else:
                 seek_pts = int((max(0, start_sec - 0.5)) * av.time_base)
-            
+
             container.seek(seek_pts, stream=stream, backward=True)
-            
+
             for frame in container.decode(stream):
                 frame_time = frame.time
-                if frame_time is None and frame.pts is not None and stream.time_base:
+                if (
+                        frame_time is None
+                        and frame.pts is not None
+                        and stream.time_base
+                ):
                     frame_time = float(frame.pts * stream.time_base)
-                    
+
                 if frame_time is None:
                     frame_time = 0.0
-                    
+
                 if frame_time < start_sec - 0.01:
                     continue
-                    
-                frames.append(frame.to_ndarray(format='rgb24'))
-                
+
+                frames.append(frame.to_ndarray(format="rgb24"))
+
                 if len(frames) >= int(length_frames):
                     break
     except Exception as e:
         log.warning(f"[PromptRelay] Video extract error: {e}")
-        
+
     if not frames:
         return torch.zeros((1, 512, 512, 3), dtype=torch.float32)
-        
+
     frames_np = np.array(frames, dtype=np.float32) / 255.0
     return torch.from_numpy(frames_np)
 
-def _resize_image(tensor: torch.Tensor, target_w: int, target_h: int, method: str, divisible_by: int) -> torch.Tensor:
+
+def _resize_image(
+        tensor: torch.Tensor,
+        target_w: int,
+        target_h: int,
+        method: str,
+        divisible_by: int = 32,
+        ) -> torch.Tensor:
     """Resize an [N, H, W, 3] float32 tensor to target dimensions using the given method,
     then snap the final dimensions to be divisible by `divisible_by`."""
-    
+
+    divisible_by = (
+            int(divisible_by)
+            if isinstance(divisible_by, (int, float)) and divisible_by > 0
+            else 32
+    )
+
     def snap(val, div):
         return max(div, (val // div) * div)
 
@@ -122,38 +143,53 @@ def _resize_image(tensor: torch.Tensor, target_w: int, target_h: int, method: st
         return tensor
 
     t_nchw = tensor.permute(0, 3, 1, 2)
-    
+
     if method == "stretch to fit":
-        resized = F.interpolate(t_nchw, size=(th, tw), mode="bilinear", align_corners=False)
-        
+        resized = F.interpolate(
+                t_nchw, size=(th, tw), mode="bilinear", align_corners=False,
+                )
+
     elif method == "maintain aspect ratio":
         ratio = min(tw / W, th / H)
         new_w = snap(int(W * ratio), divisible_by)
         new_h = snap(int(H * ratio), divisible_by)
-        resized = F.interpolate(t_nchw, size=(new_h, new_w), mode="bilinear", align_corners=False)
-        
+        resized = F.interpolate(
+                t_nchw, size=(new_h, new_w), mode="bilinear", align_corners=False,
+                )
+
     elif method == "pad":
         ratio = min(tw / W, th / H)
         new_w = snap(int(W * ratio), divisible_by)
         new_h = snap(int(H * ratio), divisible_by)
-        inner = F.interpolate(t_nchw, size=(new_h, new_w), mode="bilinear", align_corners=False)
-        
+        inner = F.interpolate(
+                t_nchw, size=(new_h, new_w), mode="bilinear", align_corners=False,
+                )
+
         pad_l = (tw - new_w) // 2
         pad_t = (th - new_h) // 2
-        resized = F.pad(inner, (pad_l, tw - new_w - pad_l, pad_t, th - new_h - pad_t), mode="constant", value=0)
-        
+        resized = F.pad(
+                inner,
+                (pad_l, tw - new_w - pad_l, pad_t, th - new_h - pad_t),
+                mode="constant",
+                value=0,
+                )
+
     elif method == "crop":
         ratio = max(tw / W, th / H)
         new_w = int(W * ratio)
         new_h = int(H * ratio)
-        inner = F.interpolate(t_nchw, size=(new_h, new_w), mode="bilinear", align_corners=False)
-        
+        inner = F.interpolate(
+                t_nchw, size=(new_h, new_w), mode="bilinear", align_corners=False,
+                )
+
         left = (new_w - tw) // 2
         top = (new_h - th) // 2
-        resized = inner[:, :, top:top+th, left:left+tw]
-        
+        resized = inner[:, :, top: top + th, left: left + tw]
+
     else:
-        resized = F.interpolate(t_nchw, size=(th, tw), mode="bilinear", align_corners=False)
+        resized = F.interpolate(
+                t_nchw, size=(th, tw), mode="bilinear", align_corners=False,
+                )
 
     return resized.permute(0, 2, 3, 1)
 
@@ -163,16 +199,16 @@ def _compress_image(tensor: torch.Tensor, crf: int) -> torch.Tensor:
     crf=0 means no compression. Uses PyAV to encode/decode frames in-memory."""
     if crf == 0:
         return tensor
-        
+
     N, H, W, C = tensor.shape
-    
+
     # Dimensions must be even for H.264
     h = (H // 2) * 2
     w = (W // 2) * 2
-    
+
     # uint8 [N, H, W, 3]
     tensor_bytes = (tensor[:, :h, :w, :] * 255.0).byte().cpu().numpy()
-    
+
     try:
         buf = _io.BytesIO()
         container = av.open(buf, mode="w", format="mp4")
@@ -181,46 +217,58 @@ def _compress_image(tensor: torch.Tensor, crf: int) -> torch.Tensor:
         stream.height = h
         stream.pix_fmt = "yuv420p"
         stream.options = {"crf": str(crf), "preset": "ultrafast"}
-        
+
         for i in range(N):
             frame = av.VideoFrame.from_ndarray(tensor_bytes[i], format="rgb24")
             for pkt in stream.encode(frame):
                 container.mux(pkt)
-                
+
         for pkt in stream.encode(None):
             container.mux(pkt)
-            
+
         container.close()
-        
+
         buf.seek(0)
         container_r = av.open(buf, mode="r")
-        decoded = [frame_r.to_ndarray(format="rgb24") for frame_r in container_r.decode(video=0)]
+        decoded = [
+                frame_r.to_ndarray(format="rgb24")
+                for frame_r in container_r.decode(video=0)
+                ]
         container_r.close()
-        
+
         if not decoded:
             return tensor
-            
+
         decoded_np = np.stack(decoded).astype(np.float32) / 255.0
-        
+
         # Re-embed into original tensor shape (may have been cropped by even-rounding)
         out = tensor.clone()
         dec_N = min(N, len(decoded))
-        out[:dec_N, :h, :w] = torch.from_numpy(decoded_np[:dec_N]).to(tensor.device, tensor.dtype)
-        
+        out[:dec_N, :h, :w] = torch.from_numpy(decoded_np[:dec_N]).to(
+                tensor.device, tensor.dtype,
+                )
+
         return out
-        
+
     except Exception as e:
         log.warning("[PromptRelay] img_compression encode/decode failed: %s", e)
         return tensor
 
 
-def _build_combined_audio(timeline_data_str: str, duration_frames: int, frame_rate: float) -> dict:
-    """Parses timeline JSON, loads/trims audio directly from memory using PyAV, 
+def _build_combined_audio(
+        timeline_data_str: str, duration_frames: int, frame_rate: float,
+        ) -> dict:
+    """Parses timeline JSON, loads/trims audio directly from memory using PyAV,
     and aligns to a global timeline yielding ComfyUI's format.
     Output length explicitly mimics the timeline's duration_frames length."""
     target_sr = 44100
-    total_samples = max(1, int(math.ceil(duration_frames / frame_rate * target_sr)))
-    empty_audio = {"waveform": torch.zeros((1, 2, total_samples), dtype=torch.float32), "sample_rate": target_sr}
+    total_samples = max(
+            1, int(math.ceil(duration_frames / frame_rate * target_sr)),
+            )
+    empty_audio = {
+            "waveform": torch.zeros((1, 2, total_samples), dtype=torch.float32),
+            "sample_rate": target_sr,
+            }
 
     if not timeline_data_str:
         return empty_audio
@@ -239,11 +287,13 @@ def _build_combined_audio(timeline_data_str: str, duration_frames: int, frame_ra
     for seg in audio_segs:
         buffer = None
         if seg.get("audioFile"):
-            file_path = os.path.join(folder_paths.get_input_directory(), seg["audioFile"])
+            file_path = os.path.join(
+                    folder_paths.get_input_directory(), seg["audioFile"],
+                    )
             if os.path.exists(file_path):
                 with open(file_path, "rb") as f:
                     buffer = _io.BytesIO(f.read())
-        
+
         if not buffer and seg.get("audioB64"):
             b64 = seg.get("audioB64")
             if "," in b64:
@@ -253,30 +303,30 @@ def _build_combined_audio(timeline_data_str: str, duration_frames: int, frame_ra
                 buffer = _io.BytesIO(audio_bytes)
             except:
                 pass
-                
+
         if not buffer:
             continue
 
         try:
             clip_frames = []
-            
+
             # Use PyAV to decode directly from memory buffer
             with av.open(buffer) as container:
                 stream = container.streams.audio[0]
-                
+
                 # Setup resampler to ensure output is 44.1kHz, Stereo, Float32 Planar
                 resampler = av.AudioResampler(
-                    format='fltp',
-                    layout='stereo',
+                        format="fltp",
+                        layout="stereo",
                     rate=target_sr,
                 )
-                
+
                 for frame in container.decode(stream):
                     for resampled_frame in resampler.resample(frame):
                         # to_ndarray() on fltp gives shape (channels, samples)
                         arr = resampled_frame.to_ndarray()
                         clip_frames.append(torch.from_numpy(arr))
-                
+
                 # Flush the resampler to get any remaining samples
                 for resampled_frame in resampler.resample(None):
                     arr = resampled_frame.to_ndarray()
@@ -286,7 +336,9 @@ def _build_combined_audio(timeline_data_str: str, duration_frames: int, frame_ra
                 continue
 
             # Concatenate all frame blocks along the samples dimension (dim 1)
-            waveform = torch.cat(clip_frames, dim=1) # Shape: [2, total_clip_samples]
+            waveform = torch.cat(
+                    clip_frames, dim=1,
+                    )  # Shape: [2, total_clip_samples]
 
             # Calculate interactive trim boundaries
             trim_start_frames = float(seg.get("trimStart", 0))
@@ -297,22 +349,24 @@ def _build_combined_audio(timeline_data_str: str, duration_frames: int, frame_ra
             length_samples = int(length_frames / frame_rate * target_sr)
             end_sample_src = start_sample_src + length_samples
 
-            if start_sample_src < 0: start_sample_src = 0
+            if start_sample_src < 0:
+                start_sample_src = 0
             if end_sample_src > waveform.shape[1]:
                 end_sample_src = waveform.shape[1]
 
             actual_length = end_sample_src - start_sample_src
-            if actual_length <= 0: continue
+            if actual_length <= 0:
+                continue
 
             # Extract the correct segment of the audio
             clip_waveform = waveform[:, start_sample_src:end_sample_src]
 
             # Position onto the timeline
             start_sample_dst = int(start_frames / frame_rate * target_sr)
-            
+
             if start_sample_dst >= out_waveform.shape[1]:
                 continue
-                
+
             end_sample_dst = start_sample_dst + actual_length
 
             # Clip any trailing overflow so we don't index past the timeline bounds
@@ -320,7 +374,7 @@ def _build_combined_audio(timeline_data_str: str, duration_frames: int, frame_ra
                 actual_length = out_waveform.shape[1] - start_sample_dst
                 clip_waveform = clip_waveform[:, :actual_length]
                 end_sample_dst = start_sample_dst + actual_length
-                
+
             if actual_length <= 0:
                 continue
 
@@ -328,7 +382,11 @@ def _build_combined_audio(timeline_data_str: str, duration_frames: int, frame_ra
             out_waveform[:, start_sample_dst:end_sample_dst] += clip_waveform
 
         except Exception as e:
-            log.warning("[PromptRelay] Audio process error for segment %s: %s", seg.get("fileName"), e)
+            log.warning(
+                    "[PromptRelay] Audio process error for segment %s: %s",
+                    seg.get("fileName"),
+                    e,
+                    )
             continue
 
     return {"waveform": out_waveform.unsqueeze(0), "sample_rate": target_sr}
@@ -356,7 +414,9 @@ def _convert_to_latent_lengths(pixel_lengths, temporal_stride, latent_frames):
     result = [int(e) for e in exact]
     diff = target_total - sum(result)
     if diff > 0:
-        order = sorted(range(len(exact)), key=lambda i: -(exact[i] - int(exact[i])))
+        order = sorted(
+                range(len(exact)), key=lambda i: -(exact[i] - int(exact[i])),
+                )
         for k in range(diff):
             result[order[k % len(order)]] += 1
 
@@ -371,10 +431,14 @@ def _convert_to_latent_lengths(pixel_lengths, temporal_stride, latent_frames):
     return result
 
 
-def _encode_relay(model, clip, latent, global_prompt, local_prompts, segment_lengths, epsilon):
-    for name, val in (("global_prompt", global_prompt),
-                      ("local_prompts", local_prompts),
-                      ("segment_lengths", segment_lengths)):
+def _encode_relay(
+        model, clip, latent, global_prompt, local_prompts, segment_lengths, epsilon,
+        ):
+    for name, val in (
+                ("global_prompt", global_prompt),
+                ("local_prompts", local_prompts),
+                ("segment_lengths", segment_lengths),
+            ):
         if val is None:
             raise ValueError(
                 f"PromptRelay: '{name}' arrived as None. "
@@ -385,11 +449,13 @@ def _encode_relay(model, clip, latent, global_prompt, local_prompts, segment_len
 
     # Split prompts but do NOT filter out empty ones yet, so we can detect them
     locals_list = [p.strip() for p in local_prompts.split("|")]
-    
+
     # Check if any specific segment is empty
     for p in locals_list:
         if not p:
-            raise ValueError("There is a segment on the timeline missing a prompt!")
+            raise ValueError(
+                    "There is a segment on the timeline missing a prompt!",
+                    )
 
     if not locals_list or (len(locals_list) == 1 and not locals_list[0]):
         raise ValueError("At least one local prompt is required.")
@@ -398,27 +464,51 @@ def _encode_relay(model, clip, latent, global_prompt, local_prompts, segment_len
 
     samples = latent["samples"]
     latent_frames = samples.shape[2]
-    tokens_per_frame = (samples.shape[3] // patch_size[1]) * (samples.shape[4] // patch_size[2])
+    tokens_per_frame = (samples.shape[3] // patch_size[1]) * (
+            samples.shape[4] // patch_size[2]
+    )
 
     parsed_lengths = None
     if segment_lengths.strip():
-        pixel_lengths = [int(float(x.strip())) for x in segment_lengths.split(",") if x.strip()]
-        parsed_lengths = _convert_to_latent_lengths(pixel_lengths, temporal_stride, latent_frames)
+        pixel_lengths = [
+                int(float(x.strip()))
+                for x in segment_lengths.split(",")
+                if x.strip()
+                ]
+        parsed_lengths = _convert_to_latent_lengths(
+                pixel_lengths, temporal_stride, latent_frames,
+                )
 
     raw_tokenizer = get_raw_tokenizer(clip)
-    full_prompt, token_ranges = map_token_indices(raw_tokenizer, global_prompt, locals_list)
+    full_prompt, token_ranges = map_token_indices(
+            raw_tokenizer, global_prompt, locals_list,
+            )
 
-    log.info("[PromptRelay] Global: tokens [0:%d] (%d tokens)", token_ranges[0][0], token_ranges[0][0])
+    log.info(
+            "[PromptRelay] Global: tokens [0:%d] (%d tokens)",
+            token_ranges[0][0],
+            token_ranges[0][0],
+            )
     for i, (s, e) in enumerate(token_ranges):
-        log.info("[PromptRelay] Segment %d: tokens [%d:%d] (%d tokens)", i, s, e, e - s)
+        log.info(
+                "[PromptRelay] Segment %d: tokens [%d:%d] (%d tokens)",
+                i,
+                s,
+                e,
+                e - s,
+                )
 
     conditioning = clip.encode_from_tokens_scheduled(clip.tokenize(full_prompt))
 
-    effective_lengths = distribute_segment_lengths(len(locals_list), latent_frames, parsed_lengths)
+    effective_lengths = distribute_segment_lengths(
+            len(locals_list), latent_frames, parsed_lengths,
+            )
 
     log.info(
         "[PromptRelay] Latent: %d frames, %d tokens/frame, segments: %s",
-        latent_frames, tokens_per_frame, effective_lengths,
+            latent_frames,
+            tokens_per_frame,
+            effective_lengths,
     )
 
     q_token_idx = build_segments(token_ranges, effective_lengths, epsilon, None)
@@ -447,113 +537,337 @@ class LTXDirector(io.ComfyNode):
             inputs=[
                 io.Model.Input("model"),
                 io.Clip.Input("clip"),
-                io.Vae.Input("audio_vae", optional=True, tooltip="Optional. Connect an Audio VAE to generate audio latents."),
-                io.Latent.Input("optional_latent", optional=True, tooltip="Optional. Connect a latent to override the auto-generated one."),
+                    io.Vae.Input(
+                            "audio_vae",
+                            optional=True,
+                            tooltip="Optional. Connect an Audio VAE to generate audio latents.",
+                            ),
+                    io.Latent.Input(
+                            "optional_latent",
+                            optional=True,
+                            tooltip="Optional. Connect a latent to override the auto-generated one.",
+                            ),
                 io.String.Input(
-                    "global_prompt", multiline=True, default="",
+                        "global_prompt",
+                        multiline=True,
+                        default="",
                     tooltip="Conditions the entire video. Anchors persistent characters, objects, and scene context.",
                 ),
                 io.Int.Input(
-                    "duration_frames", default=120, min=1, max=10000, step=1,
+                        "duration_frames",
+                        default=120,
+                        min=1,
+                        max=10000,
+                        step=1,
                     tooltip="Total timeline length in pixel-space frames. Used by the editor for visual scale only.",
                 ),
                 io.Float.Input(
-                    "duration_seconds", default=5, min=0.1, max=1000.0, step=0.01,
+                        "duration_seconds",
+                        default=5,
+                        min=0.1,
+                        max=1000.0,
+                        step=0.01,
                     tooltip="Total timeline duration in seconds (computed/synced from frames).",
                 ),
+                    io.Float.Input(
+                            "render_start_seconds",
+                            default=0.0,
+                            min=0.0,
+                            max=1000.0,
+                            step=0.01,
+                            optional=True,
+                            tooltip="Crop the generation window to start from this second instead of 0.0s.",
+                            ),
+                    io.Float.Input(
+                            "render_duration_seconds",
+                            default=0.0,
+                            min=0.0,
+                            max=1000.0,
+                            step=0.01,
+                            optional=True,
+                            tooltip="How many seconds to generate. Set to 0.0 to generate all the way to the end of the timeline.",
+                            ),
                 io.String.Input(
-                    "timeline_data", default="",
+                        "timeline_data",
+                        default="",
                     tooltip="JSON state of the timeline editor (auto-managed; do not edit by hand).",
                 ),
                 io.Boolean.Input(
-                    "use_custom_audio", default=False, optional=True,
+                        "use_custom_audio",
+                        default=False,
+                        optional=True,
                     tooltip="Toggle between using timeline audio (ON) and generating audio from scratch (OFF).",
                 ),
                 io.String.Input(
-                    "local_prompts", multiline=True, default="",
+                        "local_prompts",
+                        multiline=True,
+                        default="",
                     tooltip="Auto-populated from the timeline editor.",
                 ),
                 io.String.Input(
-                    "segment_lengths", default="",
+                        "segment_lengths",
+                        default="",
                     tooltip="Auto-populated from the timeline editor (pixel-space frame counts).",
                 ),
                 io.Float.Input(
-                    "epsilon", default=0.001, min=0.0001, max=0.99, step=0.0001,
+                        "epsilon",
+                        default=0.001,
+                        min=0.0001,
+                        max=0.99,
+                        step=0.0001,
                     tooltip="Penalty decay parameter. Values below ~0.1 all produce sharp boundaries (paper default 0.001). For softer transitions, try 0.5 or higher.",
                 ),
                 io.Float.Input(
-                    "frame_rate", default=24, min=1, max=240, step=1, optional=True,
+                        "frame_rate",
+                        default=24,
+                        min=1,
+                        max=240,
+                        step=1,
+                        optional=True,
                     tooltip="Frames per second — only affects how time is displayed in the timeline editor when time_units is set to 'seconds'.",
                 ),
                 io.Combo.Input(
-                    "display_mode", options=["frames", "seconds"], default="seconds", optional=True,
+                        "display_mode",
+                        options=["frames", "seconds"],
+                        default="seconds",
+                        optional=True,
                     tooltip="Display the ruler, segment ranges, length input, and total in frames or seconds. Internal storage is always pixel-space frames.",
                 ),
                 io.String.Input(
-                    "guide_strength", default="",
+                        "guide_strength",
+                        default="",
                     tooltip="Auto-populated from the timeline editor (comma-separated guide strengths for image segments).",
                 ),
                 io.Int.Input(
-                    "custom_width", default=0, min=0, max=8192, step=1, optional=True,
+                        "custom_width",
+                        default=0,
+                        min=0,
+                        max=8192,
+                        step=1,
+                        optional=True,
                     tooltip="Target output width for all image segments. Set to 0 to use the original image width.",
                 ),
                 io.Int.Input(
-                    "custom_height", default=0, min=0, max=8192, step=1, optional=True,
+                        "custom_height",
+                        default=0,
+                        min=0,
+                        max=8192,
+                        step=1,
+                        optional=True,
                     tooltip="Target output height for all image segments. Set to 0 to use the original image height.",
                 ),
                 io.Combo.Input(
                     "resize_method",
-                    options=["maintain aspect ratio", "stretch to fit", "pad", "crop"],
+                        options=[
+                                "maintain aspect ratio",
+                                "stretch to fit",
+                                "pad",
+                                "crop",
+                                ],
                     default="maintain aspect ratio",
                     optional=True,
                     tooltip="How to resize image segments to fit the target dimensions.",
                 ),
                 io.Int.Input(
-                    "divisible_by", default=32, min=1, max=256, step=1, optional=True,
+                        "divisible_by",
+                        default=32,
+                        min=1,
+                        max=256,
+                        step=1,
+                        optional=True,
                     tooltip="Snap the final output image dimensions to be divisible by this number (e.g. 32 for LTX).",
                 ),
                 io.Int.Input(
-                    "img_compression", default=18, min=0, max=100, step=1, optional=True,
+                        "img_compression",
+                        default=18,
+                        min=0,
+                        max=100,
+                        step=1,
+                        optional=True,
                     tooltip="H.264 CRF compression to apply to each guide image. 0 = no compression, higher = more artefacts.",
                 ),
             ],
             outputs=[
                 io.Model.Output(display_name="model"),
                 io.Conditioning.Output(display_name="positive"),
-                io.Latent.Output(display_name="video_latent", tooltip="Auto-generated LTXV empty latent (only populated when no latent is connected)."),
-                io.Latent.Output(display_name="audio_latent", tooltip="Auto-generated audio latent (uses custom audio if enabled)."),
+                    io.Latent.Output(
+                            display_name="video_latent",
+                            tooltip="Auto-generated LTXV empty latent (only populated when no latent is connected).",
+                            ),
+                    io.Latent.Output(
+                            display_name="audio_latent",
+                            tooltip="Auto-generated audio latent (uses custom audio if enabled).",
+                            ),
                 GuideData.Output(display_name="guide_data"),
-                io.Float.Output(display_name="frame_rate", tooltip="The frame rate used for the timeline."),
-                io.Audio.Output(display_name="combined_audio", tooltip="Combined timeline audio layout."),
+                    io.Float.Output(
+                            display_name="frame_rate",
+                            tooltip="The frame rate used for the timeline.",
+                            ),
+                    io.Audio.Output(
+                            display_name="combined_audio",
+                            tooltip="Combined timeline audio layout.",
+                            ),
             ],
         )
 
     @classmethod
-    def execute(cls, model, clip, global_prompt, duration_frames, duration_seconds,
-                timeline_data, local_prompts, segment_lengths, guide_strength="", epsilon=1e-3,
-                frame_rate=24, display_mode="seconds",
-                custom_width=768, custom_height=512, resize_method="maintain aspect ratio",
-                divisible_by=32, img_compression=0, audio_vae=None, optional_latent=None,
-                use_custom_audio=False) -> io.NodeOutput:
+    def execute(
+            cls,
+            model,
+            clip,
+            global_prompt,
+            duration_frames,
+            duration_seconds,
+            timeline_data,
+            local_prompts,
+            segment_lengths,
+            guide_strength="",
+            epsilon=1e-3,
+            frame_rate=24,
+            display_mode="seconds",
+            custom_width=768,
+            custom_height=512,
+            resize_method="maintain aspect ratio",
+            divisible_by=32,
+            img_compression=0,
+            audio_vae=None,
+            optional_latent=None,
+            use_custom_audio=False,
+            render_start_seconds=0.0,
+            render_duration_seconds=0.0,
+            ) -> io.NodeOutput:
+
+        # --- Calculate crop window in frame spaces (Start + Duration instead of End) ---
+        start_crop_frame = int(round(render_start_seconds * frame_rate))
+
+        if render_duration_seconds > 0.0:
+            end_crop_frame = start_crop_frame + int(
+                    round(render_duration_seconds * frame_rate),
+                    )
+        else:
+            end_crop_frame = duration_frames
+
+        if start_crop_frame < 0:
+            start_crop_frame = 0
+        if end_crop_frame > duration_frames:
+            end_crop_frame = duration_frames
+        if end_crop_frame <= start_crop_frame:
+            end_crop_frame = start_crop_frame + 1
+
+        # Override the targeted latent generation duration
+        duration_frames = end_crop_frame - start_crop_frame
+
+        # --- Slice and offset the prompt segments ---
+        if segment_lengths.strip():
+            raw_lengths = [
+                    int(float(x.strip()))
+                    for x in segment_lengths.split(",")
+                    if x.strip()
+                    ]
+            raw_prompts = [p.strip() for p in local_prompts.split("|")]
+
+            current_frame = 0
+            new_lengths = []
+            new_prompts = []
+
+            for length, prompt in zip(raw_lengths, raw_prompts):
+                seg_start = current_frame
+                seg_end = current_frame + length
+                current_frame = seg_end
+
+                overlap_start = max(seg_start, start_crop_frame)
+                overlap_end = min(seg_end, end_crop_frame)
+
+                if overlap_start < overlap_end:
+                    new_lengths.append(overlap_end - overlap_start)
+                    new_prompts.append(prompt)
+
+            if new_lengths:
+                segment_lengths = ",".join(map(str, new_lengths))
+                local_prompts = " | ".join(new_prompts)
+            else:
+                segment_lengths = str(duration_frames)
+                local_prompts = raw_prompts[0] if raw_prompts else ""
+
+        # --- Programmatically slice timeline JSON data for audio tracks ---
+        try:
+            if timeline_data:
+                tdata = json.loads(timeline_data)
+                if "audioSegments" in tdata:
+                    adjusted_audio = []
+                    for aud in tdata["audioSegments"]:
+                        a_start = float(aud.get("start", 0))
+                        a_len = float(aud.get("length", 0))
+                        a_end = a_start + a_len
+
+                        overlap_start = max(a_start, start_crop_frame)
+                        overlap_end = min(a_end, end_crop_frame)
+
+                        if overlap_start < overlap_end:
+                            aud["start"] = overlap_start - start_crop_frame
+                            if a_start < start_crop_frame:
+                                aud["trimStart"] = float(
+                                        aud.get("trimStart", 0),
+                                        ) + (start_crop_frame - a_start)
+                            aud["length"] = overlap_end - overlap_start
+                            adjusted_audio.append(aud)
+                    tdata["audioSegments"] = adjusted_audio
+                timeline_data = json.dumps(tdata)
+        except Exception as e:
+            log.warning(
+                    "[PromptRelay] Could not adjust audio timeline data: %s", e,
+                    )
 
         # --- Build guide_data from image segments FIRST (to derive output dimensions) ---
-        guide_data = {"images": [], "insert_frames": [], "strengths": [], "frame_rate": frame_rate}
+        guide_data = {
+                "images": [],
+                "insert_frames": [],
+                "strengths": [],
+                "frame_rate": frame_rate,
+                }
         derived_w, derived_h = custom_width, custom_height
         try:
             tdata = json.loads(timeline_data) if timeline_data else {}
             img_segs = [
-                s for s in tdata.get("segments", [])
+                    s
+                    for s in tdata.get("segments", [])
                 if s.get("type", "image") in ("image", "video")
                 and (s.get("imageFile") or s.get("imageB64"))
-                and int(s.get("start", 0)) < duration_frames  # exclude segments fully outside duration
+                   and int(s.get("start", 0))
+                   < duration_frames  # exclude segments fully outside duration
             ]
-            img_segs.sort(key=lambda s: s["start"])
 
+            img_segs.sort(key=lambda s: float(s.get("start", 0)))
             strengths = []
             if guide_strength.strip():
-                strengths = [float(x.strip()) for x in guide_strength.split(",") if x.strip()]
+                strengths = [
+                        float(x.strip())
+                        for x in guide_strength.split(",")
+                        if x.strip()
+                        ]
 
+            # Crop and offset images belonging to our active window
+            valid_img_segs = []
+            valid_strengths = []
             for idx, seg in enumerate(img_segs):
+                s_start = int(round(float(seg.get("start", 0))))
+                s_len = int(round(float(seg.get("length", 1))))
+                s_end = s_start + s_len
+
+                # Check if this image segment overlaps with the crop window
+                if s_start < end_crop_frame and s_end > start_crop_frame:
+                    # Calculate offset start relative to crop start, clamp to 0
+                    offset_start = max(0, s_start - start_crop_frame)
+
+                    # We create a copy of the segment dictionary so we don't mutate the original timeline_data
+                    seg_copy = seg.copy()
+                    seg_copy["start"] = offset_start
+
+                    valid_img_segs.append(seg_copy)
+                    str_val = strengths[idx] if idx < len(strengths) else 1.0
+                    valid_strengths.append(str_val)
+
+            for idx, seg in enumerate(valid_img_segs):
                 if seg.get("type") == "video":
                     tensor = _load_video_tensor(seg, float(frame_rate))
                 else:
@@ -567,21 +881,36 @@ class LTXDirector(io.ComfyNode):
 
                 if custom_width > 0 and custom_height > 0:
                     # Both dimensions set — apply selected resize_method (pad, crop, stretch, maintain AR)
-                    tensor = _resize_image(tensor, custom_width, custom_height, resize_method, divisible_by)
+                    tensor = _resize_image(
+                            tensor,
+                            custom_width,
+                            custom_height,
+                            resize_method,
+                            divisible_by,
+                            )
                 elif custom_width > 0:
                     # Width only — scale height from AR, snap both, then resize to exact dimensions
                     tgt_w = snap(custom_width, divisible_by)
                     tgt_h = snap(int(src_h * tgt_w / src_w), divisible_by)
-                    tensor = _resize_image(tensor, tgt_w, tgt_h, "stretch to fit", divisible_by)
+                    tensor = _resize_image(
+                            tensor, tgt_w, tgt_h, "stretch to fit", divisible_by,
+                            )
                 elif custom_height > 0:
                     # Height only — scale width from AR, snap both, then resize to exact dimensions
                     tgt_h = snap(custom_height, divisible_by)
                     tgt_w = snap(int(src_w * tgt_h / src_h), divisible_by)
-                    tensor = _resize_image(tensor, tgt_w, tgt_h, "stretch to fit", divisible_by)
+                    tensor = _resize_image(
+                            tensor, tgt_w, tgt_h, "stretch to fit", divisible_by,
+                            )
                 else:
                     # Both zero — keep original dimensions, just snap to divisible_by
-                    tensor = _resize_image(tensor, src_w, src_h, "maintain aspect ratio", divisible_by)
-
+                    tensor = _resize_image(
+                            tensor,
+                            src_w,
+                            src_h,
+                            "maintain aspect ratio",
+                            divisible_by,
+                            )
 
                 # Apply compression
                 if img_compression > 0:
@@ -596,7 +925,7 @@ class LTXDirector(io.ComfyNode):
                 guide_data["images"].append(tensor)
                 guide_data["insert_frames"].append(int(seg["start"]))
                 guide_data["strengths"].append(float(strength))
-            
+
             # If no images were loaded from the timeline, create a dummy image at strength 0
             # to prevent artifacts in text-to-video mode.
             if not guide_data["images"] and optional_latent is None:
@@ -604,12 +933,12 @@ class LTXDirector(io.ComfyNode):
                 h = derived_h if derived_h > 0 else 512
                 w = (w // divisible_by) * divisible_by
                 h = (h // divisible_by) * divisible_by
-                
+
                 dummy_image = torch.zeros((1, h, w, 3), dtype=torch.float32)
                 guide_data["images"].append(dummy_image)
                 guide_data["insert_frames"].append(0)
                 guide_data["strengths"].append(0.0)
-                
+
                 derived_w = w
                 derived_h = h
         except Exception as e:
@@ -629,21 +958,32 @@ class LTXDirector(io.ComfyNode):
             latent = {"samples": samples}
             log.info(
                 "[PromptRelay] Auto-generated LTXV latent: %dx%d, %d pixel frames (%d latent frames)",
-                latent_w, latent_h, ltxv_length, latent_t,
+                    latent_w,
+                    latent_h,
+                    ltxv_length,
+                    latent_t,
             )
         else:
             latent = optional_latent
 
         patched, conditioning = _encode_relay(
-            model, clip, latent, global_prompt, local_prompts, segment_lengths, epsilon,
+                model,
+                clip,
+                latent,
+                global_prompt,
+                local_prompts,
+                segment_lengths,
+                epsilon,
         )
 
         # --- Build Audio Output ---
-        audio_out = _build_combined_audio(timeline_data, ltxv_length, float(frame_rate))
+        audio_out = _build_combined_audio(
+                timeline_data, ltxv_length, float(frame_rate),
+                )
 
         # --- Audio Latent Generation ---
         audio_latent = {}
-        
+
         if audio_vae is not None:
             # Helper to generate empty latent
             def get_empty_latent():
@@ -651,7 +991,9 @@ class LTXDirector(io.ComfyNode):
                 inner = getattr(audio_vae, "first_stage_model", audio_vae)
                 z_channels = audio_vae.latent_channels
                 audio_freq = inner.latent_frequency_bins
-                num_audio_latents = inner.num_of_latents_from_frames(ltxv_length, float(frame_rate))
+                num_audio_latents = inner.num_of_latents_from_frames(
+                        ltxv_length, float(frame_rate),
+                        )
                 audio_latents = torch.zeros(
                     (1, z_channels, num_audio_latents, audio_freq),
                     device=comfy.model_management.intermediate_device(),
@@ -673,40 +1015,63 @@ class LTXDirector(io.ComfyNode):
                         # Wrapped ComfyUI VAE expects (batch, samples, channels);
                         # raw AudioVAE expects a dict with waveform in (batch, channels, samples).
                         if hasattr(audio_vae, "first_stage_model"):
-                            latent_samples = audio_vae.encode(waveform.movedim(1, -1))
+                            latent_samples = audio_vae.encode(
+                                    waveform.movedim(1, -1),
+                                    )
                         else:
-                            latent_samples = audio_vae.encode({
-                                "waveform": waveform,
-                                "sample_rate": audio_out["sample_rate"],
-                            })
-                        
+                            latent_samples = audio_vae.encode(
+                                    {
+                                            "waveform": waveform,
+                                            "sample_rate": audio_out["sample_rate"],
+                                            },
+                                    )
+
                         if latent_samples.numel() == 0:
-                            raise ValueError("Encoded audio latent is empty (0 elements).")
-                        
+                            raise ValueError(
+                                    "Encoded audio latent is empty (0 elements).",
+                                    )
+
                         # 2. Create mask starting with 1.0 (generate noise everywhere)
                         mask = torch.ones_like(latent_samples)
-                        
+
                         # 3. Punch holes (0.0) where custom audio segments exist to preserve them
-                        tdata = json.loads(timeline_data) if timeline_data else {}
+                        tdata = (
+                                json.loads(timeline_data) if timeline_data else {}
+                        )
                         for seg in tdata.get("audioSegments", []):
-                            start_sec = float(seg.get("start", 0)) / float(frame_rate)
-                            len_sec = float(seg.get("length", 1)) / float(frame_rate)
+                            start_sec = float(seg.get("start", 0)) / float(
+                                    frame_rate,
+                                    )
+                            len_sec = float(seg.get("length", 1)) / float(
+                                    frame_rate,
+                                    )
                             total_sec = ltxv_length / float(frame_rate)
 
-                            start_idx = int((start_sec / total_sec) * latent_samples.shape[2])
-                            end_idx = int(((start_sec + len_sec) / total_sec) * latent_samples.shape[2])
+                            start_idx = int(
+                                    (start_sec / total_sec)
+                                    * latent_samples.shape[2],
+                                    )
+                            end_idx = int(
+                                    ((start_sec + len_sec) / total_sec)
+                                    * latent_samples.shape[2],
+                                    )
                             mask[:, :, start_idx:end_idx, :] = 0.0
-                        
+
                         audio_latent = {
                             "samples": latent_samples,
                             "type": "audio",
-                            "noise_mask": mask
+                                "noise_mask": mask,
                         }
-                        log.info("[PromptRelay] Generated custom audio latent with dynamic noise mask.")
+                        log.info(
+                                "[PromptRelay] Generated custom audio latent with dynamic noise mask.",
+                                )
                     else:
                         raise ValueError("No audio waveform to encode.")
                 except Exception as e:
-                    log.error("[PromptRelay] Failed to generate custom audio latent: %s", e)
+                    log.error(
+                            "[PromptRelay] Failed to generate custom audio latent: %s",
+                            e,
+                            )
                     raise e
             else:
                 # Generate empty latent
@@ -714,10 +1079,21 @@ class LTXDirector(io.ComfyNode):
                     audio_latent = get_empty_latent()
                     log.info("[PromptRelay] Auto-generated empty audio latent.")
                 except Exception as e:
-                    log.error("[PromptRelay] Could not generate empty audio latent: %s", e)
+                    log.error(
+                            "[PromptRelay] Could not generate empty audio latent: %s",
+                            e,
+                            )
                     raise e
 
-        return io.NodeOutput(patched, conditioning, latent, audio_latent, guide_data, float(frame_rate), audio_out)
+        return io.NodeOutput(
+                patched,
+                conditioning,
+                latent,
+                audio_latent,
+                guide_data,
+                float(frame_rate),
+                audio_out,
+                )
 
 
 NODE_CLASS_MAPPINGS = {
