@@ -1,3 +1,5 @@
+// noinspection CssNonIntegerLengthInPixels
+
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 // const {app} = window.comfyAPI.app;
@@ -602,6 +604,44 @@ const STYLES = `
   .pr-segment:hover:not(.active) {
     color: #CCCCCC;
   }
+  /* --- Loading Overlay --- */
+    .pr-overlay {
+      font-size: 13px;
+      font-weight: 600; position: absolute; z-index: 1000; top: 0;
+      right: 0;
+      bottom: 0;
+      left: 0;
+      display: none; /* Hidden by default */
+      align-items: center;
+      flex-direction: column;
+      justify-content: center;
+      letter-spacing: 0.5px;
+      color: #B0B0FF;
+      border-radius: 6px;
+      background: rgba(15, 15, 20, 0.75);
+      backdrop-filter: blur(4px);
+    }
+    .pr-spinner {
+      width: 28px;
+      height: 28px;
+      margin-bottom: 12px;
+      animation: pr-spin 1s linear infinite;
+      border: 3px solid rgba(176, 176, 255, 0.2);
+      border-top-color: #B0B0FF;
+      border-radius: 50%;
+    }
+    @keyframes pr-spin { 
+      to { transform: rotate(360deg); } 
+    }
+  @keyframes pr-pulse {
+      0% { opacity: 1; }
+      50% { opacity: 0.4; }
+      100% { opacity: 1; }
+    }
+    .pr-btn-generating {
+      animation: pr-pulse 1.5s ease-in-out infinite;
+      pointer-events: none;
+    }
 `;
 
 if (!document.getElementById("prompt-relay-styles")) {
@@ -828,6 +868,8 @@ class TimelineEditor {
         window.removeEventListener("mouseup", this._boundOnMouseUp);
         window.removeEventListener("keydown", this.handleKeyDown, true);
         window.removeEventListener("paste", this.handlePaste, true);
+        if (this._shiftKeyDownHandler) window.removeEventListener("keydown", this._shiftKeyDownHandler);
+        if (this._shiftKeyUpHandler) window.removeEventListener("keyup", this._shiftKeyUpHandler);
     }
 
     getDisplayMode() {
@@ -1065,8 +1107,20 @@ class TimelineEditor {
 
     createDOM() {
         console.log(PluginName, "Creating Dom")
+        // --- Full Panel Loading Overlay ---
         this.wrapper = document.createElement("div");
         this.wrapper.className = "pr-wrapper";
+        this.wrapper.style.position = "relative"; // Ensure it can contain absolute elements
+
+        // --- Full Panel Loading Overlay ---
+        this.loadingOverlay = document.createElement("div");
+        this.loadingOverlay.className = "pr-overlay";
+        this.loadingOverlay.innerHTML = `
+                    <div class="pr-spinner"></div>
+                    <div>✨ Analyzing scenes with Vision Model and writing prompts...</div>
+                `;
+
+        this.wrapper.appendChild(this.loadingOverlay);
 
         this.wrapper.addEventListener("mouseenter", () => {
             this._isHovering = true;
@@ -1166,12 +1220,41 @@ class TimelineEditor {
         const generatePromptsBtn = document.createElement("button");
         generatePromptsBtn.className = "pr-btn pr-btn-vlm";
         generatePromptsBtn.innerHTML = "✨ Prompts";
-        generatePromptsBtn.title = "Generate prompts for all image segments using Qwen2.5-VL. Configure in Settings (⚙️).";
+        generatePromptsBtn.title = "Generate prompts for all image segments. [Shift+Click] to generate only for the selected segment.";
+
         generatePromptsBtn.addEventListener("click", (e) => {
             e.stopPropagation();
-            this.generatePrompts(generatePromptsBtn);
+            if (e.shiftKey) {
+                if (this.selectionType === "image" && this.selectedIndex >= 0) {
+                    this.generatePrompts(generatePromptsBtn, this.selectedIndex);
+                } else {
+                    alert("Please select an image segment first to generate a single prompt, or click normally to generate all.");
+                }
+            } else {
+                this.generatePrompts(generatePromptsBtn, -1); // -1 means all
+            }
         });
+
         this._generatePromptsBtn = generatePromptsBtn;
+
+        // Reactive Shift-Key Morphing
+        this._shiftKeyDownHandler = (e) => {
+            if (e.key === "Shift" && !generatePromptsBtn.disabled) {
+                if (this.selectionType === "image" && this.selectedIndex >= 0) {
+                    generatePromptsBtn.innerHTML = "✨ Prompt (Selected)";
+                    generatePromptsBtn.style.borderColor = "#8888FF";
+                }
+            }
+        };
+
+        this._shiftKeyUpHandler = (e) => {
+            if (e.key === "Shift" && !generatePromptsBtn.disabled) {
+                generatePromptsBtn.innerHTML = "✨ Prompts";
+                generatePromptsBtn.style.borderColor = "";
+            }
+        };
+        window.addEventListener("keydown", this._shiftKeyDownHandler);
+        window.addEventListener("keyup", this._shiftKeyUpHandler);
         // Sync disabled state from saved config
         setTimeout(() => {
             const vlmInitCfg = this._getVlmConfig();
@@ -3786,6 +3869,18 @@ class TimelineEditor {
                 this.dismissContextMenu();
             };
             menu.appendChild(openBtn);
+
+            const genPromptBtn = document.createElement("button");
+            genPromptBtn.className = "pr-gap-menu-btn";
+            genPromptBtn.innerHTML = `✨ Generate Prompt`;
+            genPromptBtn.onclick = () => {
+                this.dismissContextMenu();
+                const segIndex = this.timeline.segments.findIndex(s => s.id === seg.id);
+                if (segIndex !== -1) {
+                    this.generatePrompts(this._generatePromptsBtn, segIndex);
+                }
+            };
+            menu.appendChild(genPromptBtn);
         }
 
         if (trackType !== "audio") {
@@ -4698,7 +4793,7 @@ class TimelineEditor {
         localStorage.setItem("wdc_vlm_config", JSON.stringify(cfg));
     }
 
-    async generatePrompts(btn) {
+    async generatePrompts(btn, targetIndex = -1) {
         const cfg = this._getVlmConfig();
 
         if (!cfg.enabled) {
@@ -4709,30 +4804,50 @@ class TimelineEditor {
         const imageSections = this.timeline.segments.filter(
             s => s.type !== "text" && (s.imageB64 || s.imageFile)
         );
+
         if (imageSections.length === 0) {
             alert("No image segments found on the timeline.\nAdd images first, then click Generate Prompts.");
             return;
         }
 
+        const targetCount = targetIndex === -1 ? imageSections.length : 1;
         const origHTML = btn.innerHTML;
-        const setBtn = (html, disabled) => {
-            btn.innerHTML = html;
-            btn.disabled = disabled;
+
+        const setGeneratingState = (isGenerating, isError = false) => {
+            btn.disabled = isGenerating;
+            if (isGenerating) {
+                if (this.loadingOverlay) {
+                    this.loadingOverlay.innerHTML = `
+                            <div class="pr-spinner"></div>
+                            <div>✨ Analyzing ${targetCount} clip${targetCount > 1 ? 's' : ''} with Vision Model...</div>
+                        `;
+                    this.loadingOverlay.style.display = "flex";
+                }
+                this.promptInput.disabled = true;
+            } else {
+                if (this.loadingOverlay) this.loadingOverlay.style.display = "none";
+                this.promptInput.disabled = false;
+                if (isError) btn.innerHTML = "✗ Error";
+            }
         };
-        setBtn(`⏳ 0/${imageSections.length}…`, true);
+
+        setGeneratingState(true);
 
         try {
             const globalPromptWidget = this.node.widgets?.find(w => w.name === "global_prompt");
             const globalPrompt = globalPromptWidget?.value || "";
 
             const payload = {
-                segments: this.timeline.segments.map(s => ({
-                    imageB64: s.imageB64 || null,
-                    imageFile: s.imageFile || null,
-                    hint: s.hint || "",
-                    prompt: s.prompt || "",
-                    type: s.type || "image",
-                })),
+                segments: this.timeline.segments.map((s, idx) => {
+                    const isTarget = targetIndex === -1 || targetIndex === idx;
+                    return {
+                        imageB64: isTarget ? (s.imageB64 || null) : null,
+                        imageFile: isTarget ? (s.imageFile || null) : null,
+                        hint: s.hint || "",
+                        prompt: s.prompt || "",
+                        type: isTarget ? (s.type || "image") : "text",
+                    };
+                }),
                 global_prompt: globalPrompt,
                 model_name: cfg.model_name,
                 temperature: cfg.temperature,
@@ -4757,6 +4872,7 @@ class TimelineEditor {
 
             const prompts = data.prompts || [];
             let filled = 0;
+
             prompts.forEach((p, i) => {
                 if (i < this.timeline.segments.length && p) {
                     this.timeline.segments[i].prompt = p;
@@ -4766,27 +4882,31 @@ class TimelineEditor {
                 }
             });
 
-            if (this.selectionType === "image" && this.selectedIndex >= 0
-                && this.selectedIndex < this.timeline.segments.length) {
+            if (this.selectionType === "image" && this.selectedIndex >= 0 && this.selectedIndex < this.timeline.segments.length) {
                 this.promptInput.value = this.timeline.segments[this.selectedIndex].prompt || "";
             }
 
             this.commitChanges();
             this.render();
 
-            setBtn(`✓ ${filled} done`, true);
+            setGeneratingState(false);
+            btn.innerHTML = `✓ ${filled} done`;
+
             setTimeout(() => {
-                setBtn(origHTML, false);
+                btn.innerHTML = origHTML;
             }, 2500);
+
         } catch (e) {
-            setBtn("✗ Error", true);
+            setGeneratingState(false, true);
+
             setTimeout(() => {
-                setBtn(origHTML, false);
+                btn.innerHTML = origHTML;
+                btn.disabled = false;
             }, 3000);
+
             alert(`Prompt generation failed:\n\n${e.message}`);
         }
     }
-
 
     addSegmentInGap(frameStart, frameEnd, type = "text") {
         const seg = {
