@@ -79,6 +79,28 @@ const STYLES = `
     border-color: #cc4444;
     color: #ffaaaa;
   }
+  .pr-btn-vlm {
+    background: #1a1a2e;
+    border-color: #3a3a6e;
+    color: #b0b0ff;
+  }
+  .pr-btn-vlm:hover {
+    background: #2a2a4e;
+    border-color: #6060cc;
+    color: #d0d0ff;
+  }
+  .pr-btn-vlm:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+  .pr-vlm-section-title {
+    font-size: 10px;
+    font-weight: 600;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    padding: 4px 0 2px 0;
+  }
   .pr-canvas {
     border-radius: 6px;
     border: 1px solid #111;
@@ -94,6 +116,43 @@ const STYLES = `
     width: 100%;
     flex-grow: 1; /* Automatically scales to fill node height */
     min-height: 40px;
+    gap: 4px;
+  }
+  .pr-hint-row {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    width: 100%;
+    flex-shrink: 0;
+  }
+  .pr-hint-label {
+    font-size: 10px;
+    font-weight: 600;
+    color: #888;
+    white-space: nowrap;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    flex-shrink: 0;
+  }
+  .pr-hint-input {
+    flex: 1;
+    background: #1a1a2e;
+    color: #b0b0ff;
+    border: 1px solid #3a3a6e;
+    border-radius: 4px;
+    padding: 3px 7px;
+    font-size: 11px;
+    outline: none;
+    box-sizing: border-box;
+    font-style: italic;
+  }
+  .pr-hint-input:focus {
+    border-color: #6060cc;
+    color: #d0d0ff;
+  }
+  .pr-hint-input::placeholder {
+    color: #5a5a8a;
+    font-style: italic;
   }
   .pr-prompt-area {
     width: 100%;
@@ -362,25 +421,28 @@ const STYLES = `
   }
   .pr-settings-menu {
     position: fixed;
-    background: #1e1e1e;
-    border: 1px solid #444;
+    background: #1e1e1e !important;
+    color: #e0e0e0 !important;
+    border: 1px solid #555 !important;
     border-radius: 6px;
     padding: 10px;
     display: flex;
     flex-direction: column;
     gap: 8px;
     z-index: 9999;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.7);
-    min-width: 220px;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.85);
+    min-width: 260px;
+    max-height: 85vh;
+    overflow-y: auto;
   }
   .pr-settings-title {
     font-size: 11px;
     font-weight: 600;
-    color: #888;
+    color: #aaa !important;
     text-transform: uppercase;
     letter-spacing: 0.06em;
     padding-bottom: 4px;
-    border-bottom: 1px solid #333;
+    border-bottom: 1px solid #3a3a3a;
     margin-bottom: 2px;
   }
   .pr-settings-row {
@@ -391,9 +453,27 @@ const STYLES = `
   }
   .pr-settings-label {
     font-size: 12px;
-    color: #bbb;
+    color: #ccc !important;
     flex: 1;
     white-space: nowrap;
+  }
+  .pr-settings-field {
+    background: #2c2c2c !important;
+    color: #e0e0e0 !important;
+    border: 1px solid #4a4a4a !important;
+    border-radius: 4px;
+    padding: 4px 6px;
+    font-size: 12px;
+    outline: none;
+    cursor: pointer;
+    box-sizing: border-box;
+  }
+  .pr-settings-field:focus {
+    border-color: #6a6aaa !important;
+  }
+  .pr-settings-field option {
+    background: #2c2c2c;
+    color: #e0e0e0;
   }
   .pr-number-control {
     display: flex;
@@ -792,17 +872,17 @@ class TimelineEditor {
 
   _liveScrubVideo(seg, edge) {
     if (seg.type !== "video" || !seg.videoEl) return;
-    const targetSec = edge === "end" 
-        ? (seg.trimStart + seg.length) / this.getFrameRate() 
-        : seg.trimStart / this.getFrameRate();
-        
+    const targetSec = edge === "end"
+      ? (seg.trimStart + seg.length) / this.getFrameRate()
+      : seg.trimStart / this.getFrameRate();
+
     this._floatingPreviewSeg = seg;
     this._floatingPreviewEdge = edge;
-        
+
     if (!seg._isSeeking && Math.abs(seg.videoEl.currentTime - targetSec) > 0.05) {
-        seg._isSeeking = true;
-        seg.videoEl.currentTime = targetSec;
-        seg.videoEl.onseeked = () => { seg._isSeeking = false; this.render(); };
+      seg._isSeeking = true;
+      seg.videoEl.currentTime = targetSec;
+      seg.videoEl.onseeked = () => { seg._isSeeking = false; this.render(); };
     }
   }
 
@@ -814,9 +894,9 @@ class TimelineEditor {
       this._floatingPreviewEdge = "playhead";
       const targetSec = (seg.trimStart + (targetFrame - seg.start)) / this.getFrameRate();
       if (!seg._isSeeking && Math.abs(seg.videoEl.currentTime - targetSec) > 0.05) {
-          seg._isSeeking = true;
-          seg.videoEl.currentTime = targetSec;
-          seg.videoEl.onseeked = () => { seg._isSeeking = false; this.render(); };
+        seg._isSeeking = true;
+        seg.videoEl.currentTime = targetSec;
+        seg.videoEl.onseeked = () => { seg._isSeeking = false; this.render(); };
       }
     } else {
       this._floatingPreviewSeg = null;
@@ -838,41 +918,41 @@ class TimelineEditor {
 
     await new Promise(r => { bgVid.onloadeddata = r; bgVid.onerror = r; });
     if (!bgVid.duration) {
-        seg._extractingThumbs = false;
-        return;
+      seg._extractingThumbs = false;
+      return;
     }
 
     const duration = bgVid.duration;
-    const numFrames = Math.max(5, Math.min(60, Math.ceil(duration * 2))); 
+    const numFrames = Math.max(5, Math.min(60, Math.ceil(duration * 2)));
     const canvas = document.createElement('canvas');
     let w = bgVid.videoWidth, h = bgVid.videoHeight;
     if (w === 0 || h === 0) return;
-    
+
     if (h > this.blockHeight) {
-        w = Math.round(w * (this.blockHeight / h));
-        h = this.blockHeight;
+      w = Math.round(w * (this.blockHeight / h));
+      h = this.blockHeight;
     }
     canvas.width = w; canvas.height = h;
     const ctx = canvas.getContext('2d');
 
     for (let i = 0; i < numFrames; i++) {
-        if (!this.timeline.segments.find(s => s.id === seg.id)) break; 
-        const time = (i / numFrames) * duration;
-        bgVid.currentTime = time;
-        
-        await new Promise(r => {
-            let resolved = false;
-            const onSeek = () => { if(!resolved) { resolved = true; r(); } };
-            bgVid.onseeked = onSeek;
-            setTimeout(onSeek, 1000); 
-        });
-        
-        ctx.drawImage(bgVid, 0, 0, w, h);
-        const img = new Image();
-        img.src = canvas.toDataURL('image/jpeg', 0.5);
-        await new Promise(r => { img.onload = r; });
-        seg.thumbnails.push({ time, img });
-        this.render(); 
+      if (!this.timeline.segments.find(s => s.id === seg.id)) break;
+      const time = (i / numFrames) * duration;
+      bgVid.currentTime = time;
+
+      await new Promise(r => {
+        let resolved = false;
+        const onSeek = () => { if (!resolved) { resolved = true; r(); } };
+        bgVid.onseeked = onSeek;
+        setTimeout(onSeek, 1000);
+      });
+
+      ctx.drawImage(bgVid, 0, 0, w, h);
+      const img = new Image();
+      img.src = canvas.toDataURL('image/jpeg', 0.5);
+      await new Promise(r => { img.onload = r; });
+      seg.thumbnails.push({ time, img });
+      this.render();
     }
     seg._extractingThumbs = false;
   }
@@ -883,31 +963,31 @@ class TimelineEditor {
         const filename = seg.imageFile.split('/').pop();
         const subfolder = seg.imageFile.includes('/') ? seg.imageFile.split('/').slice(0, -1).join('/') : '';
         const vidUrl = api.apiURL(`/view?filename=${encodeURIComponent(filename)}&type=input&subfolder=${encodeURIComponent(subfolder)}`);
-        
+
         const vid = document.createElement('video');
         vid.crossOrigin = "Anonymous";
         vid.muted = true;
         vid.src = vidUrl;
         seg.videoEl = vid;
-        
+
         vid.onloadeddata = () => {
-            vid.currentTime = (seg.trimStart || 0) / this.getFrameRate() + 0.01;
-            this._ensureThumbnails(seg);
+          vid.currentTime = (seg.trimStart || 0) / this.getFrameRate() + 0.01;
+          this._ensureThumbnails(seg);
         };
         vid.onseeked = () => {
-            if (!seg.imageB64 || !seg.imgObj) {
-                const canvas = document.createElement('canvas');
-                canvas.width = Math.min(vid.videoWidth, 512);
-                canvas.height = Math.round((vid.videoHeight / vid.videoWidth) * canvas.width);
-                canvas.getContext('2d').drawImage(vid, 0, 0, canvas.width, canvas.height);
-                seg.imageB64 = canvas.toDataURL('image/jpeg');
-                const img = new Image();
-                img.onload = () => { seg.imgObj = img; this.render(); };
-                img.src = seg.imageB64;
-            }
+          if (!seg.imageB64 || !seg.imgObj) {
+            const canvas = document.createElement('canvas');
+            canvas.width = Math.min(vid.videoWidth, 512);
+            canvas.height = Math.round((vid.videoHeight / vid.videoWidth) * canvas.width);
+            canvas.getContext('2d').drawImage(vid, 0, 0, canvas.width, canvas.height);
+            seg.imageB64 = canvas.toDataURL('image/jpeg');
+            const img = new Image();
+            img.onload = () => { seg.imgObj = img; this.render(); };
+            img.src = seg.imageB64;
+          }
         };
       }
-      
+
       if (seg.imageB64 && !seg.imgObj) {
         seg.imgObj = new Image();
         seg.imgObj.onload = () => this.render();
@@ -1011,6 +1091,24 @@ class TimelineEditor {
     deleteBtn.innerHTML = `${ICONS.trash} Delete`;
     deleteBtn.addEventListener("click", () => this.deleteSelectedSegment());
 
+    const generatePromptsBtn = document.createElement("button");
+    generatePromptsBtn.className = "pr-btn pr-btn-vlm";
+    generatePromptsBtn.innerHTML = "✨ Prompts";
+    generatePromptsBtn.title = "Generate prompts for all image segments using Qwen2.5-VL. Configure in Settings (⚙️).";
+    generatePromptsBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.generatePrompts(generatePromptsBtn);
+    });
+    this._generatePromptsBtn = generatePromptsBtn;
+    // Sync disabled state from saved config
+    setTimeout(() => {
+      const vlmInitCfg = this._getVlmConfig();
+      if (!vlmInitCfg.enabled) {
+        generatePromptsBtn.disabled = true;
+        generatePromptsBtn.title = "Prompt Writer is disabled. Enable it in Settings (⚙️).";
+      }
+    }, 0);
+
     actionGroup.appendChild(this.fileInput);
     actionGroup.appendChild(this.audioFileInput);
     actionGroup.appendChild(this.videoFileInput);
@@ -1018,6 +1116,7 @@ class TimelineEditor {
     actionGroup.appendChild(addTextBtn);
     actionGroup.appendChild(uploadAudioBtn);
     actionGroup.appendChild(uploadVideoBtn);
+    actionGroup.appendChild(generatePromptsBtn);
     actionGroup.appendChild(deleteBtn);
     toolbar.appendChild(actionGroup);
 
@@ -1152,10 +1251,33 @@ class TimelineEditor {
     const propContainer = document.createElement("div");
     propContainer.className = "pr-prop-container";
 
+    // --- Hint row (persists across generations — VLM instruction per segment) ---
+    const hintRow = document.createElement("div");
+    hintRow.className = "pr-hint-row";
+
+    const hintLabel = document.createElement("span");
+    hintLabel.className = "pr-hint-label";
+    hintLabel.textContent = "✨ Hint";
+    hintLabel.title = "Stays intact after generation. Guides each image differently (e.g. 'balletto', 'lotta').";
+
+    this.hintInput = document.createElement("input");
+    this.hintInput.type = "text";
+    this.hintInput.className = "pr-hint-input";
+    this.hintInput.placeholder = "scene hint for ✨ generation (e.g. balletto, lotta, slow sunset walk)…";
+    this.hintInput.addEventListener("input", () => {
+      if (this.selectionType === "image" && this.timeline.segments[this.selectedIndex]) {
+        this.timeline.segments[this.selectedIndex].hint = this.hintInput.value;
+        this.commitChanges();
+      }
+    });
+
+    hintRow.appendChild(hintLabel);
+    hintRow.appendChild(this.hintInput);
+
     // --- Text Area (Image/Text) ---
     this.promptInput = document.createElement("textarea");
     this.promptInput.className = "pr-prompt-area";
-    this.promptInput.placeholder = "Enter prompt for selected segment...";
+    this.promptInput.placeholder = "Generated prompt — edit freely. Fill ✨ Hint above to guide the next generation.";
     this.promptInput.addEventListener("input", () => {
       if (this.selectionType === "image" && this.timeline.segments[this.selectedIndex]) {
         this.timeline.segments[this.selectedIndex].prompt = this.promptInput.value;
@@ -1167,6 +1289,7 @@ class TimelineEditor {
     this.audioInfoArea = document.createElement("div");
     this.audioInfoArea.className = "pr-audio-info";
 
+    propContainer.appendChild(hintRow);
     propContainer.appendChild(this.promptInput);
     propContainer.appendChild(this.audioInfoArea);
 
@@ -1215,13 +1338,13 @@ class TimelineEditor {
         totalFrames,
         logicalWidth
       );
-      
+
       for (let ps of this._previewSegments) {
         const orig = arrToModify.find(s => s.id === ps.id);
         if (orig) {
-            ps.videoEl = orig.videoEl;
-            ps.imgObj = orig.imgObj;
-            if (orig.thumbnails) ps.thumbnails = orig.thumbnails;
+          ps.videoEl = orig.videoEl;
+          ps.imgObj = orig.imgObj;
+          if (orig.thumbnails) ps.thumbnails = orig.thumbnails;
         }
       }
 
@@ -1264,7 +1387,7 @@ class TimelineEditor {
       if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
         const imageFiles = [];
         const audioFiles = [];
-        const videoFiles = []; 
+        const videoFiles = [];
         for (let file of e.dataTransfer.files) {
           if (file.type.startsWith("video/")) videoFiles.push(file);
           else if (file.type.startsWith("audio/")) audioFiles.push(file);
@@ -1661,12 +1784,12 @@ class TimelineEditor {
       await new Promise(async (resolve) => {
         try {
           const body = new FormData();
-          body.append("image", file); 
+          body.append("image", file);
           const resp = await api.fetchApi("/upload/image", { method: "POST", body });
-          
-          if (resp.status !== 200) { 
-            resolve(); 
-            return; 
+
+          if (resp.status !== 200) {
+            resolve();
+            return;
           }
 
           const data = await resp.json();
@@ -1677,13 +1800,13 @@ class TimelineEditor {
           const vidUrl = api.apiURL(`/view?filename=${encodeURIComponent(filename)}&type=input&subfolder=${encodeURIComponent(subfolder)}`);
 
           const vid = document.createElement('video');
-          vid.crossOrigin = "Anonymous"; 
+          vid.crossOrigin = "Anonymous";
           vid.preload = 'auto';
-          
+
           vid.onloadeddata = async () => {
             const clipDurationSecs = vid.duration;
             const clipFrames = Math.max(1, Math.ceil(clipDurationSecs * frameRate));
-            
+
             let newStart = targetFrameStart !== null ? targetFrameStart : 0;
             let newLength = clipFrames;
 
@@ -1702,7 +1825,7 @@ class TimelineEditor {
               prompt: "",
               videoEl: vid
             };
-            
+
             // And linked audio segment
             const audSeg = {
               id: sharedId + "_a",
@@ -1734,48 +1857,48 @@ class TimelineEditor {
                 peaks.push(max);
               }
               audSeg.waveformPeaks = peaks;
-            } catch(e) { 
-              console.warn("No audio in video or decode failed"); 
+            } catch (e) {
+              console.warn("No audio in video or decode failed");
             }
 
             // Extract a single frame for the static fallback thumbnail
-            vid.currentTime = 0.01; 
+            vid.currentTime = 0.01;
             vid.onseeked = () => {
-               const canvas = document.createElement('canvas');
-               canvas.width = Math.min(vid.videoWidth, 512);
-               canvas.height = Math.round((vid.videoHeight / vid.videoWidth) * canvas.width);
-               const ctx = canvas.getContext('2d');
-               ctx.drawImage(vid, 0, 0, canvas.width, canvas.height);
-               vidSeg.imageB64 = canvas.toDataURL('image/jpeg');
-               
-               const imgObj = new Image();
-               imgObj.onload = () => {
-                  vidSeg.imgObj = imgObj;
-                  this.render();
-               };
-               imgObj.src = vidSeg.imageB64;
-               
-               this.timeline.segments.push(vidSeg);
-               this.timeline.audioSegments.push(audSeg);
-               this.timeline.segments.sort((a, b) => a.start - b.start);
-               this.timeline.audioSegments.sort((a, b) => a.start - b.start);
-               
-               this.selectionType = "image";
-               this.selectedIndex = this.timeline.segments.findIndex(s => s.id === vidSeg.id);
-               
-               this.updateUIFromSelection();
-               this.commitChanges(true);
-               resolve();
-               this._ensureThumbnails(vidSeg);
+              const canvas = document.createElement('canvas');
+              canvas.width = Math.min(vid.videoWidth, 512);
+              canvas.height = Math.round((vid.videoHeight / vid.videoWidth) * canvas.width);
+              const ctx = canvas.getContext('2d');
+              ctx.drawImage(vid, 0, 0, canvas.width, canvas.height);
+              vidSeg.imageB64 = canvas.toDataURL('image/jpeg');
+
+              const imgObj = new Image();
+              imgObj.onload = () => {
+                vidSeg.imgObj = imgObj;
+                this.render();
+              };
+              imgObj.src = vidSeg.imageB64;
+
+              this.timeline.segments.push(vidSeg);
+              this.timeline.audioSegments.push(audSeg);
+              this.timeline.segments.sort((a, b) => a.start - b.start);
+              this.timeline.audioSegments.sort((a, b) => a.start - b.start);
+
+              this.selectionType = "image";
+              this.selectedIndex = this.timeline.segments.findIndex(s => s.id === vidSeg.id);
+
+              this.updateUIFromSelection();
+              this.commitChanges(true);
+              resolve();
+              this._ensureThumbnails(vidSeg);
             };
           };
 
           vid.onerror = (e) => {
-              console.error("Video load error", e);
-              resolve(); 
+            console.error("Video load error", e);
+            resolve();
           };
 
-          vid.src = vidUrl; 
+          vid.src = vidUrl;
 
         } catch (err) {
           console.error("Video upload failed", err);
@@ -1783,7 +1906,7 @@ class TimelineEditor {
         }
       });
     }
-    
+
     if (this.videoFileInput) {
       this.videoFileInput.value = "";
     }
@@ -1901,7 +2024,7 @@ class TimelineEditor {
       const isVid = seg.id.endsWith("_v");
       const isAud = seg.id.endsWith("_a");
       if (!isVid && !isAud) return;
-      
+
       const siblingId = isVid ? seg.id.slice(0, -2) + "_a" : seg.id.slice(0, -2) + "_v";
       const siblingArray = isVid ? this.timeline.audioSegments : this.timeline.segments;
       const sIdx = siblingArray.findIndex(s => s.id === siblingId);
@@ -2004,6 +2127,9 @@ class TimelineEditor {
       if (seg) {
         this.promptInput.value = seg.prompt || "";
         this.promptInput.disabled = false;
+        this.hintInput.value = seg.hint || "";
+        this.hintInput.disabled = false;
+        this.hintInput.closest(".pr-hint-row").style.display = "flex";
 
         const isImage = seg.type !== "text";
         const strength = isImage ? (seg.guideStrength ?? 1.0) : 1.0;
@@ -2012,6 +2138,9 @@ class TimelineEditor {
       } else {
         this.promptInput.value = "";
         this.promptInput.disabled = true;
+        this.hintInput.value = "";
+        this.hintInput.disabled = true;
+        this.hintInput.closest(".pr-hint-row").style.display = "none";
         this.strengthValue.value = "1.00";
         this.strengthValue.disabled = true;
       }
@@ -2124,47 +2253,47 @@ class TimelineEditor {
         const natH = seg.thumbnails[0].img.naturalHeight;
         const imgRatio = natW / natH;
         const boxRatio = pxWidth / this.blockHeight;
-        
+
         this.ctx.save();
         this.ctx.beginPath();
         this.ctx.rect(startX, RULER_HEIGHT + 1, pxWidth, this.blockHeight - 2);
         this.ctx.clip();
 
         if (imgRatio > boxRatio) {
-            const drawW = pxWidth; 
-            const drawH = pxWidth / imgRatio;
-            const drawX = startX; 
-            const drawY = RULER_HEIGHT + (this.blockHeight - drawH) / 2;
-            
-            const midSec = ((seg.trimStart || 0) + seg.length / 2) / this.getFrameRate();
+          const drawW = pxWidth;
+          const drawH = pxWidth / imgRatio;
+          const drawX = startX;
+          const drawY = RULER_HEIGHT + (this.blockHeight - drawH) / 2;
+
+          const midSec = ((seg.trimStart || 0) + seg.length / 2) / this.getFrameRate();
+          let nearestImg = seg.thumbnails[0].img;
+          let minDiff = Infinity;
+          for (const t of seg.thumbnails) {
+            const diff = Math.abs(t.time - midSec);
+            if (diff < minDiff) { minDiff = diff; nearestImg = t.img; }
+          }
+          this.ctx.drawImage(nearestImg, drawX, drawY, drawW, drawH);
+        } else {
+          const drawH = this.blockHeight;
+          const drawW = drawH * imgRatio;
+          const startSec = (seg.trimStart || 0) / this.getFrameRate();
+          const endSec = startSec + (seg.length / this.getFrameRate());
+
+          let curX = startX;
+          while (curX < startX + pxWidth) {
+            const ratioX = (curX - startX + drawW / 2) / pxWidth;
+            const timeAtX = startSec + ratioX * (endSec - startSec);
+
             let nearestImg = seg.thumbnails[0].img;
             let minDiff = Infinity;
             for (const t of seg.thumbnails) {
-                const diff = Math.abs(t.time - midSec);
-                if (diff < minDiff) { minDiff = diff; nearestImg = t.img; }
+              const diff = Math.abs(t.time - timeAtX);
+              if (diff < minDiff) { minDiff = diff; nearestImg = t.img; }
             }
-            this.ctx.drawImage(nearestImg, drawX, drawY, drawW, drawH);
-        } else {
-            const drawH = this.blockHeight;
-            const drawW = drawH * imgRatio;
-            const startSec = (seg.trimStart || 0) / this.getFrameRate();
-            const endSec = startSec + (seg.length / this.getFrameRate());
-            
-            let curX = startX;
-            while (curX < startX + pxWidth) {
-                const ratioX = (curX - startX + drawW/2) / pxWidth; 
-                const timeAtX = startSec + ratioX * (endSec - startSec);
-                
-                let nearestImg = seg.thumbnails[0].img;
-                let minDiff = Infinity;
-                for (const t of seg.thumbnails) {
-                    const diff = Math.abs(t.time - timeAtX);
-                    if (diff < minDiff) { minDiff = diff; nearestImg = t.img; }
-                }
-                
-                this.ctx.drawImage(nearestImg, curX, RULER_HEIGHT, drawW, drawH);
-                curX += drawW;
-            }
+
+            this.ctx.drawImage(nearestImg, curX, RULER_HEIGHT, drawW, drawH);
+            curX += drawW;
+          }
         }
         this.ctx.restore();
       } else if (mediaToDraw && seg.type !== "ghost") {
@@ -2173,45 +2302,45 @@ class TimelineEditor {
         const natH = isVid ? mediaToDraw.videoHeight : mediaToDraw.naturalHeight;
 
         if (natW > 0) {
-            const imgRatio = natW / natH;
-            const boxRatio = pxWidth / this.blockHeight;
-            let drawW, drawH, drawX, drawY;
-            if (imgRatio > boxRatio) {
-              drawW = pxWidth; drawH = pxWidth / imgRatio;
-              drawX = startX; drawY = RULER_HEIGHT + (this.blockHeight - drawH) / 2;
-            } else {
-              drawH = this.blockHeight; drawW = this.blockHeight * imgRatio;
-              drawY = RULER_HEIGHT; drawX = startX + (pxWidth - drawW) / 2;
-            }
+          const imgRatio = natW / natH;
+          const boxRatio = pxWidth / this.blockHeight;
+          let drawW, drawH, drawX, drawY;
+          if (imgRatio > boxRatio) {
+            drawW = pxWidth; drawH = pxWidth / imgRatio;
+            drawX = startX; drawY = RULER_HEIGHT + (this.blockHeight - drawH) / 2;
+          } else {
+            drawH = this.blockHeight; drawW = this.blockHeight * imgRatio;
+            drawY = RULER_HEIGHT; drawX = startX + (pxWidth - drawW) / 2;
+          }
 
-            // Clip to segment bounds so tiled images don't bleed into adjacent segments
-            this.ctx.save();
-            this.ctx.beginPath();
-            this.ctx.rect(startX, RULER_HEIGHT + 1, pxWidth, this.blockHeight - 2);
-            this.ctx.clip();
+          // Clip to segment bounds so tiled images don't bleed into adjacent segments
+          this.ctx.save();
+          this.ctx.beginPath();
+          this.ctx.rect(startX, RULER_HEIGHT + 1, pxWidth, this.blockHeight - 2);
+          this.ctx.clip();
 
-            if (imgRatio > boxRatio) {
-              // Fits width, vertical letterboxing (black bars top/bottom) — keep as is
-              this.ctx.drawImage(mediaToDraw, drawX, drawY, drawW, drawH);
-            } else {
-              // Fits height, horizontal letterboxing (black bars left/right) — tile horizontally
-              this.ctx.drawImage(mediaToDraw, drawX, drawY, drawW, drawH);
-              // Tile left
-              let leftX = drawX - drawW;
-              while (leftX + drawW > startX) {
-                this.ctx.drawImage(mediaToDraw, leftX, drawY, drawW, drawH);
-                leftX -= drawW;
-              }
-              let rightX = drawX + drawW;
-              while (rightX < startX + pxWidth) {
-                this.ctx.drawImage(mediaToDraw, rightX, drawY, drawW, drawH);
-                rightX += drawW;
-              }
+          if (imgRatio > boxRatio) {
+            // Fits width, vertical letterboxing (black bars top/bottom) — keep as is
+            this.ctx.drawImage(mediaToDraw, drawX, drawY, drawW, drawH);
+          } else {
+            // Fits height, horizontal letterboxing (black bars left/right) — tile horizontally
+            this.ctx.drawImage(mediaToDraw, drawX, drawY, drawW, drawH);
+            // Tile left
+            let leftX = drawX - drawW;
+            while (leftX + drawW > startX) {
+              this.ctx.drawImage(mediaToDraw, leftX, drawY, drawW, drawH);
+              leftX -= drawW;
             }
-            this.ctx.restore();
-        } 
+            let rightX = drawX + drawW;
+            while (rightX < startX + pxWidth) {
+              this.ctx.drawImage(mediaToDraw, rightX, drawY, drawW, drawH);
+              rightX += drawW;
+            }
+          }
+          this.ctx.restore();
+        }
       }
-      
+
       if ((seg.type === "video" || mediaToDraw) && seg.type !== "ghost") {
         if (seg.type === "video") {
           this.ctx.fillStyle = "rgba(0,0,0,0.6)";
@@ -2222,7 +2351,7 @@ class TimelineEditor {
           this.ctx.textBaseline = "middle";
           this.ctx.fillText("VID", startX + 19, RULER_HEIGHT + 12);
         }
-        
+
         // --- Prompt subtitle overlay ---
         if (seg.prompt && seg.type !== "ghost" && pxWidth > 24) {
           const overlayH = Math.round(this.blockHeight * 0.20);
@@ -2515,7 +2644,7 @@ class TimelineEditor {
     const grabBarH = 50;
     const grabBarX = this.viewport.scrollLeft + this.viewport.clientWidth - grabBarW - 3;
     const grabBarY = RULER_HEIGHT + (this.blockHeight + this.audioTrackHeight - grabBarH) / 2;
-    
+
     this.ctx.fillStyle = "rgba(40, 40, 40, 0.6)";
     this.ctx.beginPath();
     this.ctx.roundRect(grabBarX, grabBarY, grabBarW, grabBarH, 2);
@@ -2526,7 +2655,7 @@ class TimelineEditor {
     const hBarH = 4;
     const hBarX = this.viewport.scrollLeft + (this.viewport.clientWidth - hBarW) / 2;
     const hBarY = this.canvasHeight - hBarH - 3; // 3px from the bottom edge
-    
+
     this.ctx.fillStyle = "rgba(20, 20, 20, 0.8)";
     this.ctx.beginPath();
     this.ctx.roundRect(hBarX, hBarY, hBarW, hBarH, 2);
@@ -2538,15 +2667,15 @@ class TimelineEditor {
         const maxPh = Math.max(60, this.blockHeight - 20);
         const maxPw = 240;
         const videoRatio = (vid.videoWidth || 16) / (vid.videoHeight || 9);
-        
+
         let ph = maxPh;
         let pw = Math.round(ph * videoRatio);
-        
+
         if (pw > maxPw) {
-            pw = maxPw;
-            ph = Math.round(pw / videoRatio);
+          pw = maxPw;
+          ph = Math.round(pw / videoRatio);
         }
-        
+
         let drawX = 0;
         if (this._floatingPreviewEdge === "playhead") {
           drawX = (this.currentFrame / totalFrames) * width - (pw / 2);
@@ -2558,10 +2687,10 @@ class TimelineEditor {
             else if (this._floatingPreviewEdge === "end") drawX = ((pSeg.start + pSeg.length) / totalFrames) * width - (pw / 2);
           }
         }
-        
+
         drawX = clamp(drawX, 10, width - pw - 10);
         const drawY = RULER_HEIGHT + 10;
-        
+
         this.ctx.save();
         this.ctx.shadowColor = "rgba(0,0,0,0.8)";
         this.ctx.shadowBlur = 8;
@@ -2570,7 +2699,7 @@ class TimelineEditor {
         this.ctx.strokeRect(drawX, drawY, pw, ph);
         this.ctx.shadowBlur = 0;
         this.ctx.drawImage(vid, drawX, drawY, pw, ph);
-        
+
         this.ctx.fillStyle = "rgba(0,0,0,0.75)";
         this.ctx.fillRect(drawX, drawY + ph - 20, pw, 20);
         this.ctx.fillStyle = "#38bdf8";
@@ -3061,19 +3190,19 @@ class TimelineEditor {
     for (let ps of t) {
       const orig = targetArray.find(s => s.id === ps.id);
       if (orig) {
-          ps.videoEl = orig.videoEl;
-          ps.imgObj = orig.imgObj;
-          if (orig.thumbnails) ps.thumbnails = orig.thumbnails;
+        ps.videoEl = orig.videoEl;
+        ps.imgObj = orig.imgObj;
+        if (orig.thumbnails) ps.thumbnails = orig.thumbnails;
       }
     }
 
     if (this._dragType === "left") {
-        this._liveScrubVideo(t.find(s => s.id === this._dragTargetId), "start");
+      this._liveScrubVideo(t.find(s => s.id === this._dragTargetId), "start");
     } else if (this._dragType === "right") {
-        this._liveScrubVideo(t.find(s => s.id === this._dragTargetId), "end");
+      this._liveScrubVideo(t.find(s => s.id === this._dragTargetId), "end");
     } else if (this._dragType === "joint") {
-        this._liveScrubVideo(t.find(s => s.id === this._dragTargetId), "end");
-        this._liveScrubVideo(t.find(s => s.id === this._dragTargetIdRight), "start");
+      this._liveScrubVideo(t.find(s => s.id === this._dragTargetId), "end");
+      this._liveScrubVideo(t.find(s => s.id === this._dragTargetIdRight), "start");
     }
 
     const syncSibling = (targetId, activeArray) => {
@@ -3081,12 +3210,12 @@ class TimelineEditor {
       const isVid = targetId.endsWith("_v");
       const isAud = targetId.endsWith("_a");
       if (!isVid && !isAud) return;
-      
+
       const siblingId = isVid ? targetId.slice(0, -2) + "_a" : targetId.slice(0, -2) + "_v";
       const siblingArray = isVid ? this.timeline.audioSegments : this.timeline.segments;
       const sibling = siblingArray.find(s => s.id === siblingId);
       const active = activeArray.find(s => s.id === targetId);
-      
+
       if (sibling && active) {
         sibling.start = active.start;
         sibling.length = active.length;
@@ -3193,7 +3322,7 @@ class TimelineEditor {
           let finalStart = ps.resolvedStart !== undefined ? ps.resolvedStart : ps.start;
           let newPs = { ...ps, start: finalStart };
           if (orig && orig.imgObj) newPs.imgObj = orig.imgObj;
-          if (orig && orig.videoEl) newPs.videoEl = orig.videoEl; 
+          if (orig && orig.videoEl) newPs.videoEl = orig.videoEl;
           if (orig && orig.thumbnails) newPs.thumbnails = orig.thumbnails;
           if (orig && orig._extractingThumbs !== undefined) newPs._extractingThumbs = orig._extractingThumbs;
           delete newPs.resolvedStart;
@@ -3482,23 +3611,23 @@ class TimelineEditor {
     let siblingForUnlink = null;
 
     if (isVidLink) {
-        siblingForUnlink = this.timeline.audioSegments.find(s => s.id === seg.id.slice(0, -2) + "_a");
+      siblingForUnlink = this.timeline.audioSegments.find(s => s.id === seg.id.slice(0, -2) + "_a");
     } else if (isAudLink) {
-        siblingForUnlink = this.timeline.segments.find(s => s.id === seg.id.slice(0, -2) + "_v");
+      siblingForUnlink = this.timeline.segments.find(s => s.id === seg.id.slice(0, -2) + "_v");
     }
 
     if (siblingForUnlink) {
-        const unlinkBtn = document.createElement("button");
-        unlinkBtn.className = "pr-gap-menu-btn";
-        unlinkBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="12" x2="16" y2="12"></line></svg> Unlink Media`;
-        unlinkBtn.onclick = () => {
-            seg.id = Date.now().toString() + Math.random().toString(36).substr(2, 5);
-            siblingForUnlink.id = Date.now().toString() + Math.random().toString(36).substr(2, 5);
-            this.commitChanges();
-            this.render();
-            this.dismissContextMenu();
-        };
-        menu.appendChild(unlinkBtn);
+      const unlinkBtn = document.createElement("button");
+      unlinkBtn.className = "pr-gap-menu-btn";
+      unlinkBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="12" x2="16" y2="12"></line></svg> Unlink Media`;
+      unlinkBtn.onclick = () => {
+        seg.id = Date.now().toString() + Math.random().toString(36).substr(2, 5);
+        siblingForUnlink.id = Date.now().toString() + Math.random().toString(36).substr(2, 5);
+        this.commitChanges();
+        this.render();
+        this.dismissContextMenu();
+      };
+      menu.appendChild(unlinkBtn);
     }
 
     const currentTrack = trackType === "audio" ? "audio" : "image";
@@ -3765,7 +3894,7 @@ class TimelineEditor {
     for (const name of this._settingsWidgetNames) {
       const w = this.node.widgets?.find(w => w.name === name);
       if (!w) continue;
-      
+
       const typeMap = {
         display_mode: "combo", epsilon: "FLOAT", divisible_by: "INT",
         img_compression: "INT",
@@ -4037,6 +4166,205 @@ class TimelineEditor {
     }
 
 
+    // --- VLM Prompt Writer Config ---
+    const vlmDivider = document.createElement("hr");
+    vlmDivider.className = "pr-settings-divider";
+    menu.appendChild(vlmDivider);
+
+    const vlmTitle = document.createElement("div");
+    vlmTitle.className = "pr-vlm-section-title";
+    vlmTitle.textContent = "Prompt Writer (Qwen2.5-VL)";
+    menu.appendChild(vlmTitle);
+
+    const vlmCfg = this._getVlmConfig();
+
+    // Enable toggle
+    const enabledCb = document.createElement("input");
+    enabledCb.type = "checkbox";
+    enabledCb.checked = vlmCfg.enabled;
+    enabledCb.style.cursor = "pointer";
+    enabledCb.addEventListener("change", () => {
+      const c = this._getVlmConfig();
+      c.enabled = enabledCb.checked;
+      this._setVlmConfig(c);
+      if (this._generatePromptsBtn) {
+        this._generatePromptsBtn.disabled = !c.enabled;
+        this._generatePromptsBtn.title = c.enabled
+          ? "Generate prompts for all image segments using Qwen2.5-VL. Configure in Settings (⚙️)."
+          : "Prompt Writer is disabled. Enable it in Settings (⚙️).";
+      }
+    });
+    menu.appendChild(this._makeSettingRow("Enable Prompt Writer", enabledCb));
+
+    // Vision model dropdown
+    const modelSel = document.createElement("select");
+    modelSel.className = "pr-settings-field";
+    modelSel.style.width = "100%";
+    const vlmModelOptions = [
+      "Qwen2.5-VL-3B — Fast",
+      "Qwen2.5-VL-7B — Best quality",
+    ];
+    vlmModelOptions.forEach(opt => {
+      const o = document.createElement("option");
+      o.value = opt; o.textContent = opt;
+      if (opt === vlmCfg.model_name) o.selected = true;
+      modelSel.appendChild(o);
+    });
+    modelSel.addEventListener("change", () => {
+      const c = this._getVlmConfig(); c.model_name = modelSel.value; this._setVlmConfig(c);
+    });
+    menu.appendChild(this._makeSettingRow("Vision Model", modelSel));
+
+    // Temperature
+    const tempInput = document.createElement("input");
+    tempInput.type = "number";
+    tempInput.className = "pr-settings-field";
+    tempInput.min = 0; tempInput.max = 2; tempInput.step = 0.05;
+    tempInput.value = vlmCfg.temperature;
+    tempInput.style.width = "70px";
+    tempInput.style.textAlign = "center";
+    tempInput.addEventListener("change", () => {
+      const c = this._getVlmConfig(); c.temperature = parseFloat(tempInput.value) ?? 0.3; this._setVlmConfig(c);
+    });
+    menu.appendChild(this._makeSettingRow("Temperature", tempInput));
+
+    // Max tokens
+    const maxTokInput = document.createElement("input");
+    maxTokInput.type = "number";
+    maxTokInput.className = "pr-settings-field";
+    maxTokInput.min = 32; maxTokInput.max = 512; maxTokInput.step = 1;
+    maxTokInput.value = vlmCfg.max_tokens;
+    maxTokInput.style.width = "70px";
+    maxTokInput.style.textAlign = "center";
+    maxTokInput.addEventListener("change", () => {
+      const c = this._getVlmConfig(); c.max_tokens = parseInt(maxTokInput.value) || 180; this._setVlmConfig(c);
+    });
+    menu.appendChild(this._makeSettingRow("Max Tokens", maxTokInput));
+
+    // Offline mode
+    const offlineCb = document.createElement("input");
+    offlineCb.type = "checkbox";
+    offlineCb.checked = vlmCfg.offline_mode;
+    offlineCb.style.cursor = "pointer";
+    offlineCb.addEventListener("change", () => {
+      const c = this._getVlmConfig(); c.offline_mode = offlineCb.checked; this._setVlmConfig(c);
+    });
+    menu.appendChild(this._makeSettingRow("Offline Mode", offlineCb));
+
+    // Local model path
+    const localPathInput = document.createElement("input");
+    localPathInput.type = "text";
+    localPathInput.className = "pr-settings-field";
+    localPathInput.style.width = "100%";
+    localPathInput.value = vlmCfg.local_path;
+    localPathInput.placeholder = "Dir with config.json (HF), dir with .gguf, or .gguf file path";
+    localPathInput.addEventListener("change", () => {
+      const c = this._getVlmConfig(); c.local_path = localPathInput.value.trim(); this._setVlmConfig(c);
+    });
+    menu.appendChild(this._makeSettingRow("Local Path", localPathInput));
+
+    // mmproj path (for GGUF vision models — auto-detected if left empty)
+    const mmProjInput = document.createElement("input");
+    mmProjInput.type = "text";
+    mmProjInput.className = "pr-settings-field";
+    mmProjInput.style.width = "100%";
+    mmProjInput.value = vlmCfg.mmproj_path;
+    mmProjInput.placeholder = "mmproj .gguf — auto-detected from Local Path dir";
+    mmProjInput.addEventListener("change", () => {
+      const c = this._getVlmConfig(); c.mmproj_path = mmProjInput.value.trim(); this._setVlmConfig(c);
+    });
+    menu.appendChild(this._makeSettingRow("mmproj Path", mmProjInput));
+
+    // --- Style Directives ---
+    const styleDivider = document.createElement("hr");
+    styleDivider.className = "pr-settings-divider";
+    menu.appendChild(styleDivider);
+
+    const styleTitle = document.createElement("div");
+    styleTitle.className = "pr-vlm-section-title";
+    styleTitle.textContent = "Style Directives";
+    menu.appendChild(styleTitle);
+
+    const _makeVlmSelect = (options, currentVal, key) => {
+      const sel = document.createElement("select");
+      sel.className = "pr-settings-field";
+      sel.style.width = "100%";
+      options.forEach(opt => {
+        const o = document.createElement("option");
+        o.value = opt; o.textContent = opt;
+        if (opt === currentVal) o.selected = true;
+        sel.appendChild(o);
+      });
+      sel.addEventListener("change", () => {
+        const c = this._getVlmConfig(); c[key] = sel.value; this._setVlmConfig(c);
+      });
+      return sel;
+    };
+
+    // Style Preset — options loaded dynamically from Python STYLE_PRESETS dict
+    const presetRow = this._makeSettingRow("Style Preset", (() => {
+      const sel = document.createElement("select");
+      sel.className = "pr-settings-field";
+      sel.style.width = "100%";
+      const _fillPresetSel = (names) => {
+        sel.innerHTML = "";
+        names.forEach(opt => {
+          const o = document.createElement("option");
+          o.value = opt; o.textContent = opt;
+          if (opt === vlmCfg.style_preset) o.selected = true;
+          sel.appendChild(o);
+        });
+      };
+      // Populate from server; fall back to a minimal list on error
+      api.fetchApi("/whatdreamscost/style_presets")
+        .then(r => r.json())
+        .then(d => { if (d.presets?.length) _fillPresetSel(d.presets); })
+        .catch(() => _fillPresetSel(["None — let VLM decide"]));
+      sel.addEventListener("change", () => {
+        const c = this._getVlmConfig(); c.style_preset = sel.value; this._setVlmConfig(c);
+      });
+      return sel;
+    })());
+    menu.appendChild(presetRow);
+
+    menu.appendChild(this._makeSettingRow("Shot Angle", _makeVlmSelect([
+      "None — let VLM decide",
+      "Wide shot",
+      "Medium shot",
+      "Close-up",
+      "Extreme close-up",
+      "Aerial / Bird's eye",
+      "Low angle",
+      "Over the shoulder",
+      "POV",
+    ], vlmCfg.shot_angle, "shot_angle")));
+
+    menu.appendChild(this._makeSettingRow("Camera Movement", _makeVlmSelect([
+      "None — let VLM decide",
+      "Static",
+      "Slow dolly in",
+      "Slow dolly out",
+      "Gentle pan left",
+      "Gentle pan right",
+      "Tilt up",
+      "Tilt down",
+      "Tracking shot",
+      "Handheld",
+      "Crane / Boom up",
+      "Circular orbit",
+    ], vlmCfg.camera_move, "camera_move")));
+
+    const styleExtraInput = document.createElement("input");
+    styleExtraInput.type = "text";
+    styleExtraInput.className = "pr-settings-field";
+    styleExtraInput.style.width = "100%";
+    styleExtraInput.value = vlmCfg.style_extra;
+    styleExtraInput.placeholder = "e.g. warm golden light, shallow DOF";
+    styleExtraInput.addEventListener("change", () => {
+      const c = this._getVlmConfig(); c.style_extra = styleExtraInput.value.trim(); this._setVlmConfig(c);
+    });
+    menu.appendChild(this._makeSettingRow("Extra Instruction", styleExtraInput));
+
     // --- Show/Hide on Node Toggle ---
     const toggleBtn = document.createElement("button");
     toggleBtn.className = "pr-settings-toggle-btn";
@@ -4081,6 +4409,110 @@ class TimelineEditor {
   dismissSettingsMenu() {
     if (this._settingsMenu) { this._settingsMenu.remove(); this._settingsMenu = null; }
     if (this._settingsDismisser) { document.removeEventListener("mousedown", this._settingsDismisser); this._settingsDismisser = null; }
+  }
+
+  _getVlmConfig() {
+    let raw = {};
+    try { raw = JSON.parse(localStorage.getItem("wdc_vlm_config") || "{}"); } catch { }
+    return {
+      enabled: raw.enabled ?? true,
+      model_name: raw.model_name ?? "Qwen2.5-VL-3B — Fast",
+      temperature: raw.temperature ?? 0.3,
+      max_tokens: raw.max_tokens ?? 180,
+      offline_mode: raw.offline_mode ?? false,
+      local_path: raw.local_path ?? "",
+      mmproj_path: raw.mmproj_path ?? "",
+      style_preset: raw.style_preset ?? "None — let VLM decide",
+      shot_angle: raw.shot_angle ?? "None — let VLM decide",
+      camera_move: raw.camera_move ?? "None — let VLM decide",
+      style_extra: raw.style_extra ?? "",
+    };
+  }
+
+  _setVlmConfig(cfg) {
+    localStorage.setItem("wdc_vlm_config", JSON.stringify(cfg));
+  }
+
+  async generatePrompts(btn) {
+    const cfg = this._getVlmConfig();
+
+    if (!cfg.enabled) {
+      alert("Prompt Writer is disabled.\nEnable it in Settings (⚙️) → Prompt Writer section.");
+      return;
+    }
+
+    const imageSections = this.timeline.segments.filter(
+      s => s.type !== "text" && (s.imageB64 || s.imageFile)
+    );
+    if (imageSections.length === 0) {
+      alert("No image segments found on the timeline.\nAdd images first, then click Generate Prompts.");
+      return;
+    }
+
+    const origHTML = btn.innerHTML;
+    const setBtn = (html, disabled) => { btn.innerHTML = html; btn.disabled = disabled; };
+    setBtn(`⏳ 0/${imageSections.length}…`, true);
+
+    try {
+      const globalPromptWidget = this.node.widgets?.find(w => w.name === "global_prompt");
+      const globalPrompt = globalPromptWidget?.value || "";
+
+      const payload = {
+        segments: this.timeline.segments.map(s => ({
+          imageB64: s.imageB64 || null,
+          imageFile: s.imageFile || null,
+          hint: s.hint || "",
+          prompt: s.prompt || "",
+          type: s.type || "image",
+        })),
+        global_prompt: globalPrompt,
+        model_name: cfg.model_name,
+        temperature: cfg.temperature,
+        max_tokens: cfg.max_tokens,
+        offline_mode: cfg.offline_mode,
+        local_path: cfg.local_path,
+        mmproj_path: cfg.mmproj_path,
+        style_preset: cfg.style_preset,
+        shot_angle: cfg.shot_angle,
+        camera_move: cfg.camera_move,
+        style_extra: cfg.style_extra,
+      };
+
+      const resp = await api.fetchApi("/whatdreamscost/generate_prompts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await resp.json();
+      if (!resp.ok || data.error) throw new Error(data.error || `Server error ${resp.status}`);
+
+      const prompts = data.prompts || [];
+      let filled = 0;
+      prompts.forEach((p, i) => {
+        if (i < this.timeline.segments.length && p) {
+          this.timeline.segments[i].prompt = p;
+          if (this.timeline.segments[i].type !== "text" && (this.timeline.segments[i].imageB64 || this.timeline.segments[i].imageFile)) {
+            filled++;
+          }
+        }
+      });
+
+      if (this.selectionType === "image" && this.selectedIndex >= 0
+        && this.selectedIndex < this.timeline.segments.length) {
+        this.promptInput.value = this.timeline.segments[this.selectedIndex].prompt || "";
+      }
+
+      this.commitChanges();
+      this.render();
+
+      setBtn(`✓ ${filled} done`, true);
+      setTimeout(() => { setBtn(origHTML, false); }, 2500);
+    } catch (e) {
+      setBtn("✗ Error", true);
+      setTimeout(() => { setBtn(origHTML, false); }, 3000);
+      alert(`Prompt generation failed:\n\n${e.message}`);
+    }
   }
 
 
