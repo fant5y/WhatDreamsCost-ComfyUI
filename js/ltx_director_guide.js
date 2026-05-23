@@ -7,11 +7,7 @@ import { app } from "../../scripts/app.js";
 app.registerExtension({
     name: "Comfy.LTXDirectorGuide",
     async nodeCreated(node) {
-        if (node.comfyClass !== "LTXDirectorGuide") return;
-        // Nothing to initialize — the node has no configurable widgets.
-    },
-});
-
+        if (node.comfyClass !== "LTXDirectorGuide")
         // Nothing to initialize — the node has no configurable widgets.
     },
 });
