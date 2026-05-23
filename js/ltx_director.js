@@ -15,8 +15,8 @@ const HANDLE_HIT_PX = 14;
 const MIN_SEGMENT_LENGTH = 6;
 const MAX_THUMBNAIL_DIM = 512; // Increased to maintain quality for taller images
 
-const HIDDEN_WIDGET_NAMES = ["timeline_data", "local_prompts", "segment_lengths", "guide_strength", "audio_data", "use_custom_audio"];
-
+// const HIDDEN_WIDGET_NAMES = ["timeline_data", "local_prompts", "segment_lengths", "guide_strength", "audio_data", "use_custom_audio"];
+const HIDDEN_WIDGET_NAMES = ["timeline_data", "local_prompts", "segment_lengths", "guide_strength", "audio_data", "audio_mode"];
 
 function hideWidget(w) {
     if (!w) return;
@@ -575,34 +575,38 @@ const STYLES = `
     color: #FFFFFF;
     background: rgba(255,255,255,0.1);
   }
-  .pr-segmented-control {
-    display: flex;
+.pr-segmented-control {
+    display: inline-flex;
     align-items: center;
     box-sizing: border-box;
-    width: 110px;
-    height: 22px;
-    padding: 2px;
-    border: 1px solid #333333;
+    height: 28px; /* Matches the other toolbar buttons */
+    padding: 3px;
+    border: 1px solid #111111;
     border-radius: 6px;
-    background: #1E1E1E;
+    background: #151515; /* Dark background to make the active state pop */
   }
   .pr-segment {
-    font-size: 10px;
-    font-weight: 500;
-    line-height: 18px;
-    flex: 1;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 20px;
+    padding: 0 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     cursor: pointer;
-    transition: all 0.15s ease;
-    text-align: center;
-    color: #888888;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    color: #777777;
     border-radius: 4px;
+    user-select: none;
   }
   .pr-segment.active {
     color: #FFFFFF;
-    background: #333333;
+    background: #3A3A6E; /* Gives it a nice highlighted tint */
+    box-shadow: 0 1px 3px rgba(0,0,0,0.5);
   }
   .pr-segment:hover:not(.active) {
-    color: #CCCCCC;
+    color: #EEEEEE;
+    background: #252525;
   }
   /* --- Loading Overlay --- */
     .pr-overlay {
@@ -1255,6 +1259,7 @@ class TimelineEditor {
         };
         window.addEventListener("keydown", this._shiftKeyDownHandler);
         window.addEventListener("keyup", this._shiftKeyUpHandler);
+
         // Sync disabled state from saved config
         setTimeout(() => {
             const vlmInitCfg = this._getVlmConfig();
@@ -1271,8 +1276,8 @@ class TimelineEditor {
         actionGroup.appendChild(addTextBtn);
         actionGroup.appendChild(uploadAudioBtn);
         actionGroup.appendChild(uploadVideoBtn);
-        actionGroup.appendChild(generatePromptsBtn);
         actionGroup.appendChild(deleteBtn);
+        actionGroup.appendChild(generatePromptsBtn);
         toolbar.appendChild(actionGroup);
 
         const rightGroup = document.createElement("div");
@@ -1304,65 +1309,14 @@ class TimelineEditor {
             }
         });
 
-        const toggleBtn = document.createElement("button");
-        toggleBtn.className = "pr-btn";
-        toggleBtn.style.padding = "6px 8px";
-        toggleBtn.style.fontSize = "11px";
-        toggleBtn.style.marginRight = "0px";
-        toggleBtn.textContent = "Custom Audio: OFF";
-        toggleBtn.title = "Toggle Custom Audio Output";
-
-        const updateToggleStyle = (isOn) => {
-            toggleBtn.textContent = isOn ? "Custom Audio: ON" : "Custom Audio: OFF";
-            if (isOn) {
-                toggleBtn.style.background = "#1C222D";
-                toggleBtn.style.borderColor = "#283142";
-                toggleBtn.style.color = "#E0E0E0";
-            } else {
-                toggleBtn.style.background = "#222222";
-                toggleBtn.style.borderColor = "#111111";
-                toggleBtn.style.color = "#E0E0E0";
-            }
-        };
-
-        toggleBtn.addEventListener("click", (e) => {
-            e.stopPropagation();
-            const widget = this.node.widgets?.find(w => w.name === "use_custom_audio");
-            if (widget) {
-                widget.value = !widget.value;
-                updateToggleStyle(widget.value);
-                this.node.setDirtyCanvas(true, true);
-            }
-        });
-
-        // Initial state check (widgets might not be ready immediately)
-        setTimeout(() => {
-            const widget = this.node.widgets?.find(w => w.name === "use_custom_audio");
-            if (widget) {
-                updateToggleStyle(widget.value);
-            }
-        }, 100);
-
-        const helpBtn = document.createElement("button");
-        helpBtn.className = "pr-btn";
-        helpBtn.style.padding = "6px";
-        helpBtn.style.justifyContent = "center";
-        helpBtn.style.width = "28px";
-        helpBtn.style.height = "28px";
-        helpBtn.style.boxSizing = "border-box";
-        helpBtn.innerHTML = "?";
-        helpBtn.title = "Help / Documentation";
-        helpBtn.addEventListener("click", (e) => {
-            e.stopPropagation();
-            window.open("https://github.com/WhatDreamsCost/WhatDreamsCost-ComfyUI", "_blank");
-        });
-
         const btnGroup = document.createElement("div");
         btnGroup.style.display = "flex";
         btnGroup.style.gap = "6px";
         btnGroup.style.alignItems = "center";
-        btnGroup.appendChild(toggleBtn);
-        btnGroup.appendChild(helpBtn);
+
+        // btnGroup.appendChild(toggleBtn);
+        btnGroup.appendChild(this._createAudioModeControl());
+        btnGroup.appendChild(this._createHelpButton());
         btnGroup.appendChild(settingsBtn);
         rightGroup.appendChild(btnGroup);
 
@@ -1784,6 +1738,99 @@ class TimelineEditor {
         this.wrapper.appendChild(propContainer);
 
         this.container.appendChild(this.wrapper);
+    }
+
+
+    _createAudioModeControl() {
+        const audioModeWrapper = document.createElement("div");
+        audioModeWrapper.style.display = "flex";
+        audioModeWrapper.style.alignItems = "center";
+        audioModeWrapper.style.gap = "6px";
+        audioModeWrapper.style.marginRight = "6px";
+
+        const audioLabel = document.createElement("span");
+        audioLabel.textContent = "AUDIO:";
+        audioLabel.style.fontSize = "10px";
+        audioLabel.style.fontWeight = "700";
+        audioLabel.style.color = "#888888";
+        audioLabel.style.letterSpacing = "0.5px";
+
+        const audioModeCtrl = document.createElement("div");
+        audioModeCtrl.className = "pr-segmented-control";
+
+        // Map short labels to the exact Python values
+        const audioModes = [
+            {
+                label: "✨ Auto-Gen",
+                value: "Generate From Scratch",
+                title: "Generate new audio from scratch (ignores timeline)"
+            },
+            {
+                label: "🔄 Remix",
+                value: "Template (Audio2Audio)",
+                title: "Template mode: AI denoises your timeline audio (Dubbing)"
+            },
+            {
+                label: "🔒 Preserve",
+                value: "Preserve (Inpaint Gaps)",
+                title: "Preserve mode: Locks timeline audio, AI only fills gaps"
+            }
+        ];
+
+        const updateAudioModeUI = (val) => {
+            Array.from(audioModeCtrl.children).forEach(child => {
+                if (child.dataset.val === val) child.classList.add("active");
+                else child.classList.remove("active");
+            });
+        };
+
+        audioModes.forEach(m => {
+            const seg = document.createElement("div");
+            seg.className = "pr-segment";
+            seg.textContent = m.label;
+            seg.title = m.title;
+            seg.dataset.val = m.value;
+            seg.style.padding = "0 10px";
+
+            seg.addEventListener("click", (e) => {
+                e.stopPropagation();
+                const widget = this.node.widgets?.find(w => w.name === "audio_mode");
+                if (widget) {
+                    widget.value = m.value;
+                    updateAudioModeUI(m.value);
+                    this.node.setDirtyCanvas(true, true);
+                }
+            });
+            audioModeCtrl.appendChild(seg);
+        });
+
+        // Set initial active state based on the Python widget
+        setTimeout(() => {
+            const widget = this.node.widgets?.find(w => w.name === "audio_mode");
+            if (widget) updateAudioModeUI(widget.value);
+        }, 100);
+
+        audioModeWrapper.appendChild(audioLabel);
+        audioModeWrapper.appendChild(audioModeCtrl);
+
+        return audioModeWrapper;
+    }
+
+    _createHelpButton() {
+        const helpBtn = document.createElement("button");
+        helpBtn.className = "pr-btn";
+        helpBtn.style.padding = "6px";
+        helpBtn.style.justifyContent = "center";
+        helpBtn.style.width = "28px";
+        helpBtn.style.height = "28px";
+        helpBtn.style.boxSizing = "border-box";
+        helpBtn.innerHTML = "?";
+        helpBtn.title = "Help / Documentation";
+        helpBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            window.open("https://github.com/WhatDreamsCost/WhatDreamsCost-ComfyUI", "_blank");
+        });
+        return helpBtn;
     }
 
     checkResize() {
@@ -3778,6 +3825,8 @@ class TimelineEditor {
     // --- Context Menu ---
     onContextMenu(e) {
         e.preventDefault();
+        e.stopPropagation(); // <--- This hides the ComfyUI menu!
+        e.stopImmediatePropagation(); // <--- Safety net to guarantee it dies here
         const {x: mouseX, y: mouseY} = this.getMousePos(e);
 
         const trackHeight = this.blockHeight;
@@ -5158,7 +5207,6 @@ try {
                     if (compWidget && (compWidget.value === undefined || compWidget.value === null || compWidget.value === 0)) {
                         compWidget.value = 18;
                     }
-
                     // Hide global prompt by default on creation without destroying its DOM element
                     const globalPromptWidget = this.widgets?.find(w => w.name === "global_prompt");
                     if (globalPromptWidget) {
