@@ -1,652 +1,26 @@
 // noinspection CssNonIntegerLengthInPixels
-
-import { app } from "../../scripts/app.js";
-import { api } from "../../scripts/api.js";
 // const {app} = window.comfyAPI.app;
 // const {api} = window.comfyAPI.api;
 
-const PluginName = "[💭 WhatDreamsCost]"
-// --- UI Constants & Configuration ---
-const RULER_HEIGHT = 24;
-const BLOCK_HEIGHT = 160; // Increased to make the image timeline area much taller
-const AUDIO_TRACK_HEIGHT = 80;
-const CANVAS_HEIGHT = RULER_HEIGHT + BLOCK_HEIGHT + AUDIO_TRACK_HEIGHT;
-const HANDLE_HIT_PX = 14;
-const MIN_SEGMENT_LENGTH = 6;
-const MAX_THUMBNAIL_DIM = 512; // Increased to maintain quality for taller images
-
-// const HIDDEN_WIDGET_NAMES = ["timeline_data", "local_prompts", "segment_lengths", "guide_strength", "audio_data", "use_custom_audio"];
-const HIDDEN_WIDGET_NAMES = ["timeline_data", "local_prompts", "segment_lengths", "guide_strength", "audio_data", "audio_mode"];
-
-function hideWidget(w) {
-    if (!w) return;
-    if (!w._origType && w.type !== "hidden") w._origType = w.type;
-    // We don't set w.type = "hidden" anymore because it causes rendering issues in Nodes 2.0.
-    // Instead we use the computeSize = () => [0,0] trick which works in both V1 and V2.
-    w.hidden = true;
-    if (!w.options) w.options = {};
-    w.options.hidden = true;
-    w.computeSize = () => [0, 0];
-    if (w.element) w.element.style.display = "none";
-}
-
-function clamp(v, min, max) {
-    return Math.max(min, Math.min(max, v));
-}
-
-// --- Modern Dark/Grey UI CSS (ComfyUI Match) ---
-const STYLES = `
-  .pr-wrapper {
-    font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-    display: flex;
-    flex-direction: column;
-    box-sizing: border-box;
-    width: 100%;
-    height: 100%;
-    padding-bottom: 4px;
-    gap: 8px;
-  }
-  .pr-wrapper.drag-active {
-    border-radius: 6px;
-    outline: 2px dashed #888888;
-    background: rgba(255, 255, 255, 0.05);
-  }
-  .pr-toolbar {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    justify-content: space-between;
-    padding: 2px 0;
-    gap: 6px;
-  }
-  .pr-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-  .pr-btn {
-    font-size: 11px;
-    font-weight: 500;
-    display: flex;
-    align-items: center;
-    padding: 6px 12px;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    color: #E0E0E0;
-    border: 1px solid #111111;
-    border-radius: 4px;
-    background: #222222;
-    gap: 6px;
-  }
-  .pr-btn:hover {
-    border-color: #555555;
-    background: #333333;
-  }
-  .pr-btn-danger:hover {
-    color: #FFAAAA;
-    border-color: #CC4444;
-    background: #4A1515;
-  }
-  .pr-btn-vlm {
-    color: #B0B0FF;
-    border-color: #3A3A6E;
-    background: #1A1A2E;
-  }
-  .pr-btn-vlm:hover {
-    color: #D0D0FF;
-    border-color: #6060CC;
-    background: #2A2A4E;
-  }
-  .pr-btn-vlm:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-  .pr-vlm-section-title {
-    font-size: 10px;
-    font-weight: 600;
-    padding: 4px 0 2px 0;
-    letter-spacing: 0.8px;
-    text-transform: uppercase;
-    color: #888888;
-  }
-  .pr-canvas {
-    display: block; /* Ensure no inline baseline gaps */
-    width: 100%;
-    cursor: pointer;
-    border: 1px solid #111111;
-    border-radius: 6px;
-    outline: none;
-    background: #2A2A2A;
-  }
-  .pr-prop-container {
-    display: flex;
-    flex-direction: column;
-    flex-grow: 1; /* Automatically scales to fill node height */
-    width: 100%;
-    min-height: 40px;
-    gap: 4px;
-  }
-  .pr-hint-row {
-    display: flex;
-    align-items: center;
-    flex-shrink: 0;
-    width: 100%;
-    gap: 5px;
-  }
-  .pr-hint-label {
-    font-size: 10px;
-    font-weight: 600;
-    flex-shrink: 0;
-    white-space: nowrap;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: #888888;
-  }
-  .pr-hint-input {
-    font-size: 11px;
-    font-style: italic;
-    flex: 1;
-    box-sizing: border-box;
-    padding: 3px 7px;
-    color: #B0B0FF;
-    border: 1px solid #3A3A6E;
-    border-radius: 4px;
-    outline: none;
-    background: #1A1A2E;
-  }
-  .pr-hint-input:focus {
-    color: #D0D0FF;
-    border-color: #6060CC;
-  }
-  .pr-hint-input::placeholder {
-    font-style: italic;
-    color: #5A5A8A;
-  }
-  .pr-prompt-area {
-    font-size: 12px;
-    line-height: 1.4;
-    box-sizing: border-box;
-    width: 100%;
-    height: 100%;
-    padding: 8px;
-    resize: none; /* Removed the manual resize corner handle */
-    transition: border-color 0.2s ease;
-    color: #E0E0E0;
-    border: 1px solid #111111;
-    border-radius: 6px;
-    outline: none;
-    background: #222222;
-  }
-  .pr-prompt-area:focus {
-    border-color: #888888;
-  }
-  .pr-audio-info {
-    font-size: 12px;
-    line-height: 1.6;
-    display: none;
-    box-sizing: border-box;
-    width: 100%;
-    height: 100%;
-    padding: 10px;
-    color: #AAAAAA;
-    border: 1px solid #111111;
-    border-radius: 6px;
-    background: #181818;
-  }
-  .pr-audio-info span { font-weight: 500; color: #FFFFFF; }
-  .pr-controls-group {
-    display: flex;
-    flex-direction: column;
-    box-sizing: border-box;
-    width: 100%;
-    margin-bottom: 4px;
-    padding: 6px 10px;
-    border: 1px solid #333333;
-    border-radius: 6px;
-    background: #1E1E1E;
-    gap: 4px;
-  }
-  .pr-strength-row {
-    display: flex;
-    align-items: center;
-    box-sizing: border-box;
-    width: 100%;
-    gap: 12px;
-  }
-  .pr-height-resizer {
-    height: 6px;
-    margin: 2px 0;
-    cursor: ns-resize;
-    transition: background 0.15s;
-    border: 1px solid #1E1E1E;
-    border-radius: 3px;
-    background: #2A2A2A;
-  }
-  .pr-height-resizer:hover {
-    border-color: #555555;
-    background: #444444;
-  }
-  .pr-strength-label {
-    font-size: 11px;
-    font-weight: 600;
-    margin-left: auto;
-    white-space: nowrap;
-    color: #FFFFFF;
-  }
-  .pr-strength-slider {
-    width: 80px;
-    height: 4px;
-    cursor: pointer;
-    border: 1px solid #222222;
-    border-radius: 2px;
-    outline: none;
-    background: #444444;
-    -webkit-appearance: none;
-    appearance: none;
-  }
-  .pr-strength-slider::-webkit-slider-thumb {
-    width: 12px;
-    height: 12px;
-    cursor: pointer;
-    border-radius: 50%;
-    background: #AAAAAA;
-    -webkit-appearance: none;
-    appearance: none;
-  }
-  .pr-strength-slider:disabled {
-    cursor: not-allowed;
-    opacity: 0.3;
-  }
-  .pr-strength-input {
-    font-size: 12px;
-    width: 52px;
-    padding: 3px;
-    text-align: center;
-    color: #FFFFFF;
-    border: 1px solid #444444;
-    border-radius: 4px;
-    background: #222222;
-  }
-  .pr-strength-input::-webkit-outer-spin-button,
-  .pr-strength-input::-webkit-inner-spin-button {
-    margin: 0;
-    -webkit-appearance: none;
-  }
-  .pr-strength-input[type=number] {
-    -moz-appearance: textfield;
-  }
-  .pr-strength-input:disabled {
-    cursor: not-allowed;
-    opacity: 0.35;
-  }
-  .pr-gap-menu {
-    position: fixed;
-    z-index: 9999;
-    display: flex;
-    flex-direction: column;
-    padding: 4px;
-    border: 1px solid #444444;
-    border-radius: 6px;
-    background: #1E1E1E;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.6);
-    gap: 4px;
-  }
-  .pr-gap-menu-btn {
-    font-family: inherit;
-    font-size: 11px;
-    display: flex;
-    align-items: center;
-    padding: 6px 14px;
-    cursor: pointer;
-    transition: background 0.15s ease;
-    text-align: left;
-    white-space: nowrap;
-    color: #E0E0E0;
-    border: 1px solid #333333;
-    border-radius: 4px;
-    background: #2A2A2A;
-    gap: 6px;
-  }
-  .pr-gap-menu-btn:hover {
-    border-color: #666666;
-    background: #3A3A3A;
-  }
-  .pr-player-controls {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    justify-content: center;
-    width: 100%;
-    padding: 2px 0;
-    gap: 12px;
-  }
-  .pr-icon-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 6px 12px;
-    cursor: pointer;
-    transition: all 0.2s;
-    color: #EEEEEE;
-    border: 1px solid #444444;
-    border-radius: 4px;
-    background: #2A2A2A;
-  }
-  .pr-icon-btn * {
-    pointer-events: none;
-  }
-  .pr-icon-btn:hover {
-    color: #FFFFFF;
-    border-color: #666666;
-    background: #3A3A3A;
-  }
-  .pr-icon-btn.active {
-    color: #4FFF8F;
-    border-color: #4FFF8F;
-    background: #1A3A2A;
-  }
-  .pr-seek-bar {
-    height: 6px;
-    cursor: pointer;
-    border: 1px solid #222222;
-    border-radius: 3px;
-    outline: none;
-    background: #444444;
-    -webkit-appearance: none;
-    appearance: none;
-  }
-  .pr-seek-bar::-webkit-slider-thumb {
-    width: 14px;
-    height: 14px;
-    cursor: pointer;
-    border: 2px solid #222222;
-    border-radius: 50%;
-    background: #FF4444;
-    -webkit-appearance: none;
-    appearance: none;
-  }
-  .pr-timeline-viewport {
-    overflow-x: auto;
-    overflow-y: hidden;
-    width: 100%;
-  }
-  .pr-timeline-viewport::-webkit-scrollbar {
-    height: 10px;
-  }
-  .pr-timeline-viewport::-webkit-scrollbar-track {
-    border-radius: 5px;
-    background: #151515;
-  }
-  .pr-timeline-viewport::-webkit-scrollbar-thumb {
-    border: 1px solid #000000;
-    border-radius: 5px;
-    background: #444444;
-  }
-  .pr-timeline-viewport::-webkit-scrollbar-thumb:hover {
-    border-color: #000000;
-    background: #666666;
-  }
-  .pr-zoom-controls {
-    display: flex;
-    align-items: center;
-    margin-left: 12px;
-    gap: 4px;
-  }
-  .pr-zoom-slider {
-    width: 80px;
-    height: 4px;
-    cursor: pointer;
-    border-radius: 2px;
-    outline: none;
-    background: #444444;
-    -webkit-appearance: none;
-    appearance: none;
-  }
-  .pr-zoom-slider::-webkit-slider-thumb {
-    width: 12px;
-    height: 12px;
-    cursor: pointer;
-    border-radius: 50%;
-    background: #AAAAAA;
-    -webkit-appearance: none;
-    appearance: none;
-  }
-  .pr-right-group {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-  .pr-segment-bounds {
-    font-family: monospace;
-    font-size: 12px;
-    color: #AAAAAA;
-  }
-  .pr-timecode {
-    font-family: monospace;
-    font-size: 14px;
-    font-weight: bold;
-    color: #E0E0E0;
-  }
-  .pr-settings-menu {
-    position: fixed;
-    z-index: 9999;
-    display: flex;
-    overflow-y: auto;
-    flex-direction: column;
-    min-width: 260px;
-    max-height: 85vh;
-    padding: 10px;
-    color: #E0E0E0 !important;
-    border: 1px solid #555555 !important;
-    border-radius: 6px;
-    background: #1E1E1E !important;
-    box-shadow: 0 4px 24px rgba(0,0,0,0.85);
-    gap: 8px;
-  }
-  .pr-settings-title {
-    font-size: 11px;
-    font-weight: 600;
-    margin-bottom: 2px;
-    padding-bottom: 4px;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: #AAAAAA !important;
-    border-bottom: 1px solid #3A3A3A;
-  }
-  .pr-settings-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-  }
-  .pr-settings-label {
-    font-size: 12px;
-    flex: 1;
-    white-space: nowrap;
-    color: #CCCCCC !important;
-  }
-  .pr-settings-field {
-    font-size: 12px;
-    box-sizing: border-box;
-    padding: 4px 6px;
-    cursor: pointer;
-    color: #E0E0E0 !important;
-    border: 1px solid #4A4A4A !important;
-    border-radius: 4px;
-    outline: none;
-    background: #2C2C2C !important;
-  }
-  .pr-settings-field:focus {
-    border-color: #6A6AAA !important;
-  }
-  .pr-settings-field option {
-    color: #E0E0E0;
-    background: #2C2C2C;
-  }
-  .pr-number-control {
-    display: flex;
-    overflow: hidden;
-    align-items: center;
-    border: 1px solid #444444;
-    border-radius: 4px;
-    background: #2A2A2A;
-  }
-  .pr-number-btn {
-    font-size: 12px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 20px;
-    height: 22px;
-    cursor: pointer;
-    user-select: none;
-    transition: background 0.15s;
-    color: #AAAAAA;
-    border: none;
-    background: #333333;
-  }
-  .pr-number-btn:hover {
-    color: #FFFFFF;
-    background: #444444;
-  }
-  .pr-settings-input {
-    font-family: monospace;
-    font-size: 12px;
-    width: 50px;
-    height: 22px;
-    padding: 0 4px;
-    text-align: center;
-    color: #E0E0E0;
-    border: none;
-    outline: none;
-    background: transparent;
-    -moz-appearance: textfield;
-  }
-  .pr-settings-input::-webkit-outer-spin-button,
-  .pr-settings-input::-webkit-inner-spin-button {
-    margin: 0;
-    -webkit-appearance: none;
-  }
-  .pr-settings-select {
-    font-size: 12px;
-    width: 98px;
-    padding: 3px 4px;
-    cursor: pointer;
-    color: #E0E0E0;
-    border: 1px solid #444444;
-    border-radius: 4px;
-    background: #2A2A2A;
-  }
-  .pr-settings-divider {
-    margin: 2px 0;
-    border: none;
-    border-top: 1px solid #2A2A2A;
-  }
-  .pr-settings-toggle-btn {
-    font-size: 11px;
-    width: 100%;
-    padding: 5px 8px;
-    cursor: pointer;
-    transition: all 0.15s;
-    text-align: center;
-    color: #AAAAAA;
-    border: 1px solid #333333;
-    border-radius: 4px;
-    background: #252525;
-  }
-  .pr-settings-toggle-btn:hover {
-    color: #CCCCCC;
-    border-color: #555555;
-    background: #2E2E2E;
-  }
-  .pr-settings-close-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 2px;
-    cursor: pointer;
-    transition: all 0.15s;
-    color: #888888;
-    border: none;
-    border-radius: 4px;
-    background: transparent;
-  }
-  .pr-settings-close-btn:hover {
-    color: #FFFFFF;
-    background: rgba(255,255,255,0.1);
-  }
-.pr-segmented-control {
-    display: inline-flex;
-    align-items: center;
-    box-sizing: border-box;
-    height: 28px; /* Matches the other toolbar buttons */
-    padding: 3px;
-    border: 1px solid #111111;
-    border-radius: 6px;
-    background: #151515; /* Dark background to make the active state pop */
-  }
-  .pr-segment {
-    font-size: 11px;
-    font-weight: 600;
-    line-height: 20px;
-    padding: 0 12px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-    color: #777777;
-    border-radius: 4px;
-    user-select: none;
-  }
-  .pr-segment.active {
-    color: #FFFFFF;
-    background: #3A3A6E; /* Gives it a nice highlighted tint */
-    box-shadow: 0 1px 3px rgba(0,0,0,0.5);
-  }
-  .pr-segment:hover:not(.active) {
-    color: #EEEEEE;
-    background: #252525;
-  }
-  /* --- Loading Overlay --- */
-    .pr-overlay {
-      font-size: 13px;
-      font-weight: 600; position: absolute; z-index: 1000; top: 0;
-      right: 0;
-      bottom: 0;
-      left: 0;
-      display: none; /* Hidden by default */
-      align-items: center;
-      flex-direction: column;
-      justify-content: center;
-      letter-spacing: 0.5px;
-      color: #B0B0FF;
-      border-radius: 6px;
-      background: rgba(15, 15, 20, 0.75);
-      backdrop-filter: blur(4px);
-    }
-    .pr-spinner {
-      width: 28px;
-      height: 28px;
-      margin-bottom: 12px;
-      animation: pr-spin 1s linear infinite;
-      border: 3px solid rgba(176, 176, 255, 0.2);
-      border-top-color: #B0B0FF;
-      border-radius: 50%;
-    }
-    @keyframes pr-spin { 
-      to { transform: rotate(360deg); } 
-    }
-  @keyframes pr-pulse {
-      0% { opacity: 1; }
-      50% { opacity: 0.4; }
-      100% { opacity: 1; }
-    }
-    .pr-btn-generating {
-      animation: pr-pulse 1.5s ease-in-out infinite;
-      pointer-events: none;
-    }
-`;
+import { app }                          from "../../scripts/app.js";
+import { api }                          from "../../scripts/api.js";
+import { STYLES }                       from "./css_styles.js";
+import {
+    AUDIO_TRACK_HEIGHT,
+    AudioMode,
+    BLOCK_HEIGHT,
+    CAMERA_MOVEMENTS,
+    CANVAS_HEIGHT,
+    HANDLE_HIT_PX,
+    HIDDEN_WIDGET_NAMES,
+    MIN_SEGMENT_LENGTH,
+    PluginName,
+    RULER_HEIGHT,
+    SHOT_ANGLES
+}                                       from "./constants.js";
+import { ICONS }                        from "./icons.js";
+import { hideWidget }                   from "./helpers.js";
+import { _getVlmConfig, _setVlmConfig } from "./vlm_prompt.js";
 
 if (!document.getElementById("prompt-relay-styles")) {
     const styleEl = document.createElement("style");
@@ -655,21 +29,9 @@ if (!document.getElementById("prompt-relay-styles")) {
     document.head.appendChild(styleEl);
 }
 
-// --- Icons ---
-const ICONS = {
-    upload: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>`,
-    audio: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>`,
-    trash: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`,
-    text: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 7 4 4 20 4 20 7"></polyline><line x1="9" y1="20" x2="15" y2="20"></line><line x1="12" y1="4" x2="12" y2="20"></line></svg>`,
-    play: `<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>`,
-    pause: `<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>`,
-    loop: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12A9 9 0 0 0 6 5.3L3 8"></path><polyline points="3 3 3 8 8 8"></polyline><path d="M3 12a9 9 0 0 0 15 6.7l3-2.7"></path><polyline points="21 21 21 16 16 16"></polyline></svg>`,
-    minus: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line></svg>`,
-    plus: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>`,
-    fit: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><polyline points="8 7 3 12 8 17"></polyline><polyline points="16 7 21 12 16 17"></polyline></svg>`,
-    gear: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>`,
-    close: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>`
-};
+function clamp(v, min, max) {
+    return Math.max(min, Math.min(max, v));
+}
 
 // --- Data Models ---
 function parseInitial(jsonStr) {
@@ -781,8 +143,6 @@ class TimelineEditor {
         this.commitChanges(true);
         // Hide settings widgets by default to reduce node clutter.
         // Deferred so all widget types are finalized before we touch them.
-        console.log(PluginName, "About to init TimelineEditor", container);
-
         setTimeout(() => this.hideSettingsWidgets(), 0);
 
         let isSyncing = false;
@@ -893,7 +253,6 @@ class TimelineEditor {
         return parseInt((this.frameRateWidget && this.frameRateWidget.value > 0) ? this.frameRateWidget.value : 24, 10);
     }
 
-    // Returns the maximum allowed zoom level, computed so that at max zoom
 
     // The timeline only ever grows — never shrinks — through this method.
     growTimelineIfNeeded(requiredFrames) {
@@ -916,6 +275,7 @@ class TimelineEditor {
     // Returns the visual timeline length in frames:
     // the furthest segment end (across both tracks) × 1.30, with a floor of getDurationFrames().
 
+    // Returns the maximum allowed zoom level, computed so that at max zoom
     // the viewport shows exactly 4 seconds of the visual timeline.
     getMaxZoom() {
         const visualDurationSecs = this.getVisualDurationFrames() / this.getFrameRate();
@@ -1109,670 +469,1045 @@ class TimelineEditor {
         }
     }
 
-    createDOM() {
-        console.log(PluginName, "Creating Dom")
-        // --- Full Panel Loading Overlay ---
-        this.wrapper = document.createElement("div");
-        this.wrapper.className = "pr-wrapper";
-        this.wrapper.style.position = "relative"; // Ensure it can contain absolute elements
+// --- Helper for concise element creation ---
+    _el(tag, props = {}, children = []) {
+        const el = document.createElement(tag);
+        for (const [k, v] of Object.entries(props)) {
+            if (k === "style" && typeof v === "object") Object.assign(el.style, v);
+            else if (k.startsWith("on") && typeof v === "function") el.addEventListener(k.substring(2).toLowerCase(), v);
+            else el[k] = v;
+        }
+        children.forEach(c => el.appendChild(typeof c === "string" ? document.createTextNode(c) : c));
+        return el;
+    }
 
-        // --- Full Panel Loading Overlay ---
-        this.loadingOverlay = document.createElement("div");
-        this.loadingOverlay.className = "pr-overlay";
-        this.loadingOverlay.innerHTML = `
-                    <div class="pr-spinner"></div>
-                    <div>✨ Analyzing scenes with Vision Model and writing prompts...</div>
-                `;
-
-        this.wrapper.appendChild(this.loadingOverlay);
-
-        this.wrapper.addEventListener("mouseenter", () => {
-            this._isHovering = true;
+    _createBtn(label, icon, className, onClick, tooltip = "") {
+        return this._el("button", {
+            className: `pr-btn ${className}`.trim(),
+            innerHTML: icon ? `${icon} ${label}`.trim() : label,
+            title: tooltip,
+            onClick
         });
-        this.wrapper.addEventListener("mouseleave", () => {
-            this._isHovering = false;
-        });
+    }
 
-        this.handleKeyDown = (e) => {
-            const activeTag = document.activeElement ? document.activeElement.tagName : "";
-            if (activeTag === "INPUT" || activeTag === "TEXTAREA") return;
-
-            if ((e.key === "Delete" || e.key === "Backspace") && this.selectedIndex !== -1 && this._isHovering) {
-                this.deleteSelectedSegment();
-                e.stopPropagation();
-                e.stopImmediatePropagation();
-                e.preventDefault();
-            } else if ((e.key === " " || e.code === "Space") && this._isHovering) {
-                this.togglePlay();
-                e.stopPropagation();
-                e.stopImmediatePropagation();
-                e.preventDefault();
-            }
-        };
-        window.addEventListener("keydown", this.handleKeyDown, true);
-
-        this.handlePaste = (e) => {
-            if (this._isHovering) {
-                const activeTag = document.activeElement ? document.activeElement.tagName : "";
-                if (activeTag === "INPUT" || activeTag === "TEXTAREA") return;
-
-                if (e.clipboardData && e.clipboardData.files && e.clipboardData.files.length > 0) {
-                    const imageFiles = Array.from(e.clipboardData.files).filter(f => f.type.startsWith("image/"));
-                    if (imageFiles.length > 0) {
-                        this.handleImageUpload(imageFiles, this.currentFrame);
-                        e.preventDefault();
-                        e.stopPropagation();
-                    }
-                }
-            }
-        };
-        window.addEventListener("paste", this.handlePaste, true);
-
-        // --- Toolbar ---
-        const toolbar = document.createElement("div");
-        toolbar.className = "pr-toolbar";
-
+    _buildActionGroup() {
         const actionGroup = document.createElement("div");
         actionGroup.className = "pr-actions";
 
-        this.fileInput = document.createElement("input");
-        this.fileInput.type = "file";
-        this.fileInput.accept = "image/*";
-        this.fileInput.multiple = true;
-        this.fileInput.style.display = "none";
-        this.fileInput.addEventListener("change", (e) => this.handleImageUpload(e.target.files));
+        actionGroup.appendChild(this._createBtn("Add Image", ICONS.upload, "", () => this.fileInput.click()));
+        actionGroup.appendChild(this._createBtn("Add Audio", ICONS.audio, "", () => this.audioFileInput.click()));
+        actionGroup.appendChild(this._createBtn("Add Video", ICONS.video, "", () => this.videoFileInput.click()));
+        actionGroup.appendChild(this._createBtn("Add Text", ICONS.text, "", () => this.addTextSegmentFreeSpace()));
+        actionGroup.appendChild(this._createBtn("Delete", ICONS.trash, "pr-btn-danger", () => this.deleteSelectedSegment()));
 
-        this.audioFileInput = document.createElement("input");
-        this.audioFileInput.type = "file";
-        this.audioFileInput.accept = "audio/*";
-        this.audioFileInput.multiple = true;
-        this.audioFileInput.style.display = "none";
-        this.audioFileInput.addEventListener("change", (e) => this.handleAudioUpload(e.target.files));
-
-        this.videoFileInput = document.createElement("input");
-        this.videoFileInput.type = "file";
-        this.videoFileInput.accept = "video/*";
-        this.videoFileInput.multiple = true;
-        this.videoFileInput.style.display = "none";
-        this.videoFileInput.addEventListener("change", (e) => this.handleVideoUpload(e.target.files));
-
-        const uploadBtn = document.createElement("button");
-        uploadBtn.className = "pr-btn";
-        uploadBtn.innerHTML = `${ICONS.upload} Add Image`;
-        uploadBtn.addEventListener("click", () => this.fileInput.click());
-
-        const uploadAudioBtn = document.createElement("button");
-        uploadAudioBtn.className = "pr-btn";
-        uploadAudioBtn.innerHTML = `${ICONS.audio} Add Audio`;
-        uploadAudioBtn.addEventListener("click", () => this.audioFileInput.click());
-
-        const uploadVideoBtn = document.createElement("button");
-        uploadVideoBtn.className = "pr-btn";
-        uploadVideoBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"></polygon><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect></svg> Add Video`;
-        uploadVideoBtn.addEventListener("click", () => this.videoFileInput.click());
-
-        const addTextBtn = document.createElement("button");
-        addTextBtn.className = "pr-btn";
-        addTextBtn.innerHTML = `${ICONS.text} Add Text`;
-        addTextBtn.addEventListener("click", () => this.addTextSegmentFreeSpace());
-
-        const deleteBtn = document.createElement("button");
-        deleteBtn.className = "pr-btn pr-btn-danger";
-        deleteBtn.innerHTML = `${ICONS.trash} Delete`;
-        deleteBtn.addEventListener("click", () => this.deleteSelectedSegment());
-
-        const generatePromptsBtn = document.createElement("button");
-        generatePromptsBtn.className = "pr-btn pr-btn-vlm";
-        generatePromptsBtn.innerHTML = "✨ Prompts";
-        generatePromptsBtn.title = "Generate prompts for all image segments. [Shift+Click] to generate only for the selected segment.";
-
-        generatePromptsBtn.addEventListener("click", (e) => {
-            e.stopPropagation();
-            if (e.shiftKey) {
-                if (this.selectionType === "image" && this.selectedIndex >= 0) {
-                    this.generatePrompts(generatePromptsBtn, this.selectedIndex);
+        // Complex Prompts Button
+        this._generatePromptsBtn = this._createBtn(
+            "Prompts", "✨", "pr-btn-vlm",
+            (e) => {
+                e.stopPropagation();
+                if (e.shiftKey) {
+                    if (this.selectionType !== "audio" && this.selectedIndex >= 0) {
+                        this.generatePrompts(this._generatePromptsBtn, this.selectedIndex);
+                    } else {
+                        alert("Please select an image/video/text segment first to generate a single prompt, or click normally to generate all.");
+                    }
                 } else {
-                    alert("Please select an image segment first to generate a single prompt, or click normally to generate all.");
+                    this.generatePrompts(this._generatePromptsBtn, -1); // -1 means all
                 }
-            } else {
-                this.generatePrompts(generatePromptsBtn, -1); // -1 means all
-            }
-        });
-
-        this._generatePromptsBtn = generatePromptsBtn;
+            },
+            "Generate prompts for all image/text/video segments. [Shift+Click] to generate only for the selected segment."
+        );
 
         // Reactive Shift-Key Morphing
         this._shiftKeyDownHandler = (e) => {
-            if (e.key === "Shift" && !generatePromptsBtn.disabled) {
-                if (this.selectionType === "image" && this.selectedIndex >= 0) {
-                    generatePromptsBtn.innerHTML = "✨ Prompt (Selected)";
-                    generatePromptsBtn.style.borderColor = "#8888FF";
+            if (e.key === "Shift" && !this._generatePromptsBtn.disabled) {
+                if (this.selectionType !== "audio" && this.selectedIndex >= 0) {
+                    this._generatePromptsBtn.innerHTML = "✨ Prompt (Selected)";
+                    this._generatePromptsBtn.style.borderColor = "#8888FF";
                 }
             }
         };
 
         this._shiftKeyUpHandler = (e) => {
-            if (e.key === "Shift" && !generatePromptsBtn.disabled) {
-                generatePromptsBtn.innerHTML = "✨ Prompts";
-                generatePromptsBtn.style.borderColor = "";
+            if (e.key === "Shift" && !this._generatePromptsBtn.disabled) {
+                this._generatePromptsBtn.innerHTML = "✨ Prompts";
+                this._generatePromptsBtn.style.borderColor = "";
             }
         };
+
         window.addEventListener("keydown", this._shiftKeyDownHandler);
         window.addEventListener("keyup", this._shiftKeyUpHandler);
 
         // Sync disabled state from saved config
         setTimeout(() => {
-            const vlmInitCfg = this._getVlmConfig();
+            const vlmInitCfg = _getVlmConfig();
             if (!vlmInitCfg.enabled) {
-                generatePromptsBtn.disabled = true;
-                generatePromptsBtn.title = "Prompt Writer is disabled. Enable it in Settings (⚙️).";
+                this._generatePromptsBtn.disabled = true;
+                this._generatePromptsBtn.title = "Prompt Writer is disabled. Enable it in Settings (⚙️).";
             }
         }, 0);
 
-        actionGroup.appendChild(this.fileInput);
-        actionGroup.appendChild(this.audioFileInput);
-        actionGroup.appendChild(this.videoFileInput);
-        actionGroup.appendChild(uploadBtn);
-        actionGroup.appendChild(addTextBtn);
-        actionGroup.appendChild(uploadAudioBtn);
-        actionGroup.appendChild(uploadVideoBtn);
-        actionGroup.appendChild(deleteBtn);
-        actionGroup.appendChild(generatePromptsBtn);
-        toolbar.appendChild(actionGroup);
+        actionGroup.appendChild(this._generatePromptsBtn);
 
-        const rightGroup = document.createElement("div");
-        rightGroup.className = "pr-right-group";
+        return actionGroup;
+    }
 
-        this.segmentBoundsDisplay = document.createElement("div");
-        this.segmentBoundsDisplay.className = "pr-segment-bounds";
-        this.segmentBoundsDisplay.textContent = "Start: - | End: -";
+    createDOM() {
+        console.log(PluginName, "Creating Dom");
 
-        this.timeCodeDisplay = document.createElement("div");
-        this.timeCodeDisplay.className = "pr-timecode";
-        this.timeCodeDisplay.textContent = this.formatTime(0);
-
-        const settingsBtn = document.createElement("button");
-        settingsBtn.className = "pr-btn";
-        settingsBtn.style.padding = "6px";
-        settingsBtn.style.justifyContent = "center";
-        settingsBtn.style.width = "28px";
-        settingsBtn.style.height = "28px";
-        settingsBtn.style.boxSizing = "border-box";
-        settingsBtn.innerHTML = ICONS.gear;
-        settingsBtn.title = "Settings";
-        settingsBtn.addEventListener("click", (e) => {
-            e.stopPropagation();
-            if (this._settingsMenu) {
-                this.dismissSettingsMenu();
-            } else {
-                this.showSettingsMenu(settingsBtn);
-            }
+        this.wrapper = this._el("div", {
+            className: "pr-wrapper", style: {position: "relative"},
+            onMouseenter: () => this._isHovering = true,
+            onMouseleave: () => this._isHovering = false
         });
 
-        const btnGroup = document.createElement("div");
-        btnGroup.style.display = "flex";
-        btnGroup.style.gap = "6px";
-        btnGroup.style.alignItems = "center";
+        this._buildOverlay();
+        this._buildInputs();
+        this._buildToolbar();
+        this._buildViewport();
+        this._buildControlsAndProps();
+        this._attachGlobalEvents();
 
-        // btnGroup.appendChild(toggleBtn);
-        btnGroup.appendChild(this._createAudioModeControl());
-        btnGroup.appendChild(this._createHelpButton());
-        btnGroup.appendChild(settingsBtn);
-        rightGroup.appendChild(btnGroup);
+        this.container.appendChild(this.wrapper);
+    }
 
-        toolbar.appendChild(rightGroup);
+    // --- DOM Construction Sub-Methods ---
 
-        // --- Canvas & Viewport ---
-        this.viewport = document.createElement("div");
-        this.viewport.className = "pr-timeline-viewport";
+    _buildOverlay() {
+        this.loadingOverlay = this._el("div", {className: "pr-overlay"});
+        this.loadingOverlay.innerHTML = `<div class="pr-spinner"></div><div>✨ Analyzing scenes with Vision Model and writing prompts...</div>`;
+        this.wrapper.appendChild(this.loadingOverlay);
+    }
 
-        this.viewport.addEventListener("wheel", (e) => {
-            if (e.ctrlKey || e.metaKey) {
-                e.preventDefault();
-                e.stopPropagation();
+    _buildInputs() {
+        const makeInput = (type, fn) => this._el("input", {
+            type: "file",
+            accept: `${type}/*`,
+            multiple: true,
+            style: {display: "none"},
+            onChange: (e) => fn(e.target.files)
+        });
+        this.fileInput = makeInput("image", f => this.handleImageUpload(f));
+        this.audioFileInput = makeInput("audio", f => this.handleAudioUpload(f));
+        this.videoFileInput = makeInput("video", f => this.handleVideoUpload(f));
+    }
 
-                let zoomDelta = e.deltaY > 0 ? -0.5 : 0.5;
-                this.zoomLevel = Math.max(1, Math.min(this.getMaxZoom(), this.zoomLevel + zoomDelta));
-                if (this.zoomSlider) this.zoomSlider.value = this.zoomLevel;
+    _buildToolbar() {
+        const actionGroup = this._buildActionGroup();
+        actionGroup.append(this.fileInput, this.audioFileInput, this.videoFileInput);
 
-                const oldWidth = this.canvas.offsetWidth;
-                const newWidth = this.viewport.clientWidth * this.zoomLevel;
-                const mouseX = e.clientX - this.viewport.getBoundingClientRect().left;
-                const scrollRatio = (this.viewport.scrollLeft + mouseX) / oldWidth;
+        this.segmentBoundsDisplay = this._el("div", {className: "pr-segment-bounds", textContent: "Start: - | End: -"});
+        this.timeCodeDisplay = this._el("div", {className: "pr-timecode", textContent: this.formatTime(0)});
 
-                this.canvas.style.width = newWidth + "px";
-                this.viewport.scrollLeft = scrollRatio * newWidth - mouseX;
-            }
-        }, {passive: false, capture: true});
+        const settingsBtn = this._createBtn("", ICONS.gear, "pr-settings-btn", (e) => {
+            e.stopPropagation();
+            this._settingsMenu ? this.dismissSettingsMenu() : this.showSettingsMenu(settingsBtn);
+        }, "Settings");
 
-        this.canvas = document.createElement("canvas");
-        this.canvas.className = "pr-canvas";
+        const btnGroup = this._el("div", {className: "pr-btn-group"}, [this._createAudioModeControl(), this._createHelpButton(), settingsBtn]);
+        const rightGroup = this._el("div", {className: "pr-right-group"}, [btnGroup]);
+
+        this.wrapper.appendChild(this._el("div", {className: "pr-toolbar"}, [actionGroup, rightGroup]));
+    }
+
+    _buildViewport() {
+        this.canvas = this._el("canvas", {
+            className: "pr-canvas", style: {width: "100%", height: `${CANVAS_HEIGHT}px`},
+            onMousedown: (e) => this.onMouseDown(e),
+            onContextmenu: (e) => this.onContextMenu(e)
+        });
         this.ctx = this.canvas.getContext("2d");
-        this.canvas.style.width = "100%";
 
-        this.viewport.appendChild(this.canvas);
+        this.viewport = this._el("div", {className: "pr-timeline-viewport"}, [this.canvas]);
+        this.viewport.addEventListener("wheel", (e) => this._handleZoomWheel(e), {passive: false, capture: true});
 
-        this.canvas.addEventListener("mousedown", (e) => this.onMouseDown(e));
-        this.canvas.addEventListener("contextmenu", (e) => this.onContextMenu(e));
-        this.canvas.style.height = `${CANVAS_HEIGHT}px`;
+        this.wrapper.appendChild(this.viewport);
+    }
 
-        // --- Content Area Container ---
-        const propContainer = document.createElement("div");
-        propContainer.className = "pr-prop-container";
+    _buildControlsAndProps() {
+        this.wrapper.appendChild(this._el("div", {className: "pr-controls-group"}, [
+            this._createStrengthRow(),
+            this._createPlayerControls()
+        ]));
+        this.wrapper.appendChild(this._createPropContainer());
+    }
 
-        // --- Hint row (persists across generations — VLM instruction per segment) ---
-        const hintRow = document.createElement("div");
-        hintRow.className = "pr-hint-row";
-
-        const hintLabel = document.createElement("span");
-        hintLabel.className = "pr-hint-label";
-        hintLabel.textContent = "✨ Hint";
-        hintLabel.title = "Stays intact after generation. Guides each image differently (e.g. 'balletto', 'lotta').";
-
-        this.hintInput = document.createElement("input");
-        this.hintInput.type = "text";
-        this.hintInput.className = "pr-hint-input";
-        this.hintInput.placeholder = "scene hint for ✨ generation (e.g. balletto, lotta, slow sunset walk)…";
-        this.hintInput.addEventListener("input", () => {
-            if (this.selectionType === "image" && this.timeline.segments[this.selectedIndex]) {
-                this.timeline.segments[this.selectedIndex].hint = this.hintInput.value;
-                this.commitChanges();
-            }
+    _createPlayerControls() {
+        const mkBtn = (icn, fn, tip) => this._el("button", {
+            className: "pr-icon-btn",
+            innerHTML: icn,
+            title: tip,
+            onClick: fn,
+            style: {padding: "4px"}
         });
 
-        hintRow.appendChild(hintLabel);
-        hintRow.appendChild(this.hintInput);
+        this.playBtn = mkBtn(ICONS.play, () => this.togglePlay(), "Play/Pause Audio");
+        this.loopBtn = mkBtn(ICONS.loop, () => this.toggleLoop(), "Toggle Loop");
+        const zoomOut = mkBtn(ICONS.minus, () => this._setZoom(parseFloat(this.zoomSlider.value) - 0.5), "Zoom Out");
+        const zoomIn = mkBtn(ICONS.plus, () => this._setZoom(parseFloat(this.zoomSlider.value) + 0.5), "Zoom In");
+        const zoomFit = mkBtn(ICONS.fit, () => this._setZoom(1, true), "Zoom to Fit");
 
-        // --- Text Area (Image/Text) ---
-        this.promptInput = document.createElement("textarea");
-        this.promptInput.className = "pr-prompt-area";
-        this.promptInput.placeholder = "Generated prompt — edit freely. Fill ✨ Hint above to guide the next generation.";
-        this.promptInput.addEventListener("input", () => {
-            if (this.selectionType === "image" && this.timeline.segments[this.selectedIndex]) {
-                this.timeline.segments[this.selectedIndex].prompt = this.promptInput.value;
-                this.commitChanges();
-            }
-        });
-
-        // --- Audio Info Area ---
-        this.audioInfoArea = document.createElement("div");
-        this.audioInfoArea.className = "pr-audio-info";
-
-        propContainer.appendChild(hintRow);
-        propContainer.appendChild(this.promptInput);
-        propContainer.appendChild(this.audioInfoArea);
-
-        this.wrapper.addEventListener("dragover", (e) => {
-            e.preventDefault();
-            this.wrapper.classList.add("drag-active");
-
-            const {x, y} = this.getMousePos(e);
-            const logicalWidth = this.canvas.offsetWidth;
-            const totalFrames = this.getVisualDurationFrames();
-            if (!logicalWidth || totalFrames <= 0) return;
-
-            const isAudioTrack = y > RULER_HEIGHT + this.blockHeight;
-            const trackType = isAudioTrack ? "audio" : "image";
-            const arrToModify = isAudioTrack ? this.timeline.audioSegments : this.timeline.segments;
-
-            if (!this._ghostSegmentId || this._ghostTrack !== trackType) {
-                this._ghostSegmentId = "GHOST_" + Date.now();
-                this._ghostTrack = trackType;
-                this._ghostInitialTimeline = JSON.parse(JSON.stringify(arrToModify));
-
-                const frameRate = this.getFrameRate();
-                const newLength = Math.max(1, frameRate * 1);
-
-                let mouseFrameX = x * (totalFrames / logicalWidth);
-                let startFrame = clamp(Math.round(mouseFrameX - newLength / 2), 0, totalFrames - newLength);
-
-                this._ghostInitialTimeline.push({
-                    id: this._ghostSegmentId,
-                    start: startFrame,
-                    length: newLength,
-                    type: "ghost"
-                });
-            }
-
-            let mouseFrameX = x * (totalFrames / logicalWidth);
-            const ghost = this._ghostInitialTimeline.find(s => s.id === this._ghostSegmentId);
-            let D_mouse_start = mouseFrameX - ghost.length / 2;
-
-            this._previewSegments = this._applyCenterDragPhysics(
-                this._ghostInitialTimeline,
-                this._ghostSegmentId,
-                D_mouse_start,
-                mouseFrameX,
-                totalFrames,
-                totalFrames,
-                logicalWidth
-            );
-
-            for (let ps of this._previewSegments) {
-                const orig = arrToModify.find(s => s.id === ps.id);
-                if (orig) {
-                    ps.videoEl = orig.videoEl;
-                    ps.imgObj = orig.imgObj;
-                    if (orig.thumbnails) ps.thumbnails = orig.thumbnails;
-                }
-            }
-
-            this.render();
-        });
-
-        this.wrapper.addEventListener("dragleave", (e) => {
-            const rect = this.wrapper.getBoundingClientRect();
-            if (e.clientX < rect.left || e.clientX >= rect.right ||
-                e.clientY < rect.top || e.clientY >= rect.bottom) {
-                this.wrapper.classList.remove("drag-active");
-                this._ghostSegmentId = null;
-                this._ghostTrack = null;
-                this._ghostInitialTimeline = null;
-                this._previewSegments = null;
+        this.seekBar = this._el("input", {
+            type: "range", className: "pr-seek-bar", min: "0", value: "0", style: {flex: "1"}, onInput: (e) => {
+                this.currentFrame = parseInt(e.target.value, 10);
                 this.render();
+                if (this.isPlaying) this.playAudio();
             }
         });
 
-        this.wrapper.addEventListener("drop", (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            this.wrapper.classList.remove("drag-active");
+        this.zoomSlider = this._el("input", {
+            type: "range",
+            className: "pr-zoom-slider",
+            min: "1",
+            max: "1",
+            step: "0.1",
+            value: "1",
+            title: "Zoom Level",
+            onInput: (e) => this._handleZoomSlider(e)
+        });
 
-            let targetFrameStart = null;
-            let targetTrack = this._ghostTrack || "image";
+        const zoomControls = this._el("div", {className: "pr-zoom-controls"}, [zoomOut, this.zoomSlider, zoomIn, zoomFit]);
+        return this._el("div", {className: "pr-player-controls"}, [this.playBtn, this.loopBtn, this.seekBar, zoomControls]);
+    }
 
-            if (this._ghostSegmentId && this._previewSegments) {
-                const ghost = this._previewSegments.find(s => s.id === this._ghostSegmentId);
-                if (ghost) {
-                    targetFrameStart = ghost.resolvedStart !== undefined ? ghost.resolvedStart : ghost.start;
+    _createStrengthRow() {
+        this.strengthValue = this._el("input", {
+            type: "text",
+            className: "pr-strength-input",
+            value: "1.00",
+            disabled: true,
+            style: {cursor: "ew-resize"}
+        });
+        this._attachStrengthDrag();
+
+        this.strengthRow = this._el("div", {className: "pr-strength-row"}, [
+            this.timeCodeDisplay, this.segmentBoundsDisplay,
+            this._el("span", {className: "pr-strength-label", textContent: "Guide Strength:"}),
+            this.strengthValue
+        ]);
+
+        return this.strengthRow;
+    }
+
+    _createPropContainer() {
+        const onInput = (prop) => (e) => {
+            if (this.selectionType === "image" && this.timeline.segments[this.selectedIndex]) {
+                this.timeline.segments[this.selectedIndex][prop] = e.target.value;
+                this.commitChanges();
+            }
+        };
+
+        this.hintInput = this._el("input", {
+            type: "text",
+            className: "pr-hint-input",
+            placeholder: "scene hint for ✨ generation...",
+            onInput: onInput('hint')
+        });
+        this.promptInput = this._el("textarea", {
+            className: "pr-prompt-area",
+            placeholder: "Generated prompt — edit freely.",
+            onInput: onInput('prompt')
+        });
+        this.audioInfoArea = this._el("div", {className: "pr-audio-info"});
+
+        const hintRow = this._el("div", {className: "pr-hint-row"}, [
+            this._el("span", {
+                className: "pr-hint-label",
+                textContent: "✨ Hint",
+                title: "Stays intact after generation."
+            }),
+            this.hintInput
+        ]);
+
+        return this._el("div", {className: "pr-prop-container"}, [hintRow, this.promptInput, this.audioInfoArea]);
+    }
+
+    // --- Extracted Event Handlers & Logic ---
+
+    _setZoom(val, fit = false) {
+        this.zoomLevel = fit ? 1 : Math.max(1, Math.min(this.getMaxZoom(), val));
+        this.zoomSlider.value = this.zoomLevel;
+        this.zoomSlider.dispatchEvent(new Event("input"));
+        if (fit) this.viewport.scrollLeft = 0;
+    }
+
+    _handleZoomWheel(e) {
+        if (!e.ctrlKey && !e.metaKey) return;
+        e.preventDefault();
+        e.stopPropagation();
+
+        this.zoomLevel = Math.max(1, Math.min(this.getMaxZoom(), this.zoomLevel + (e.deltaY > 0 ? -0.5 : 0.5)));
+        if (this.zoomSlider) this.zoomSlider.value = this.zoomLevel;
+
+        const oldWidth = this.canvas.offsetWidth;
+        const newWidth = this.viewport.clientWidth * this.zoomLevel;
+        const mouseX = e.clientX - this.viewport.getBoundingClientRect().left;
+
+        this.canvas.style.width = newWidth + "px";
+        this.viewport.scrollLeft = ((this.viewport.scrollLeft + mouseX) / oldWidth) * newWidth - mouseX;
+    }
+
+    _handleZoomSlider(e) {
+        this.zoomLevel = parseFloat(e.target.value);
+        const vw = this.viewport.clientWidth;
+        const newWidth = Math.max(vw, vw * this.zoomLevel);
+
+        this.canvas.style.width = newWidth + "px";
+        this.resizeCanvas(newWidth);
+        this._lastWidth = vw;
+        this._lastZoom = this.zoomLevel;
+
+        const playheadRatio = this.currentFrame / this.getVisualDurationFrames();
+        this.viewport.scrollLeft = (playheadRatio * newWidth) - (vw / 2);
+    }
+
+    _attachStrengthDrag() {
+        let isDragging = false, startX = 0, startVal = 0, hasMoved = false;
+
+        const onMove = (e) => {
+            if (Math.abs(e.clientX - startX) > 3) {
+                hasMoved = true;
+                isDragging = true;
+            }
+            if (isDragging) {
+                e.preventDefault();
+                let newVal = Math.max(0, Math.min(1, startVal + (e.clientX - startX) * 0.002));
+                this.strengthValue.value = newVal.toFixed(2);
+
+                if (this.selectionType === "image" && this.timeline.segments[this.selectedIndex]?.type !== "text") {
+                    this.timeline.segments[this.selectedIndex].guideStrength = newVal;
+                    this.commitChanges();
                 }
             }
-            this._ghostSegmentId = null;
-            this._ghostTrack = null;
-            this._ghostInitialTimeline = null;
-            this._previewSegments = null;
-            this.render();
-
-            if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-                const imageFiles = [];
-                const audioFiles = [];
-                const videoFiles = [];
-                for (let file of e.dataTransfer.files) {
-                    if (file.type.startsWith("video/")) videoFiles.push(file);
-                    else if (file.type.startsWith("audio/")) audioFiles.push(file);
-                    else if (file.type.startsWith("image/")) imageFiles.push(file);
-                }
-
-                // Let implicit intent handle mixing drops: use the track we hovered over
-                // for the first type we process, or fallback.
-                if (videoFiles.length > 0) {
-                    this.handleVideoUpload(videoFiles, targetFrameStart);
-                } else if (audioFiles.length > 0 && (targetTrack === "audio" || imageFiles.length === 0)) {
-                    this.handleAudioUpload(audioFiles, targetFrameStart);
-                } else if (imageFiles.length > 0) {
-                    this.handleImageUpload(imageFiles, targetFrameStart);
-                }
+        };
+        const onUp = () => {
+            document.removeEventListener("mousemove", onMove);
+            document.removeEventListener("mouseup", onUp);
+            if (!hasMoved) {
+                this.strengthValue.focus();
+                this.strengthValue.select();
             }
-        });
-
-        // Because these are anonymous functions, they cannot be targeted for removal. When a user deletes the LTXDirector node in ComfyUI, your destroy() method runs, but these listeners persist forever. Every time the node is deleted and added, a new set of ghost listeners is created, holding the entire TimelineEditor class (and all its canvases/images) in memory.
-        //
-        // Fix: Bind them to the class instance so they can be removed in destroy().
-
-        // window.addEventListener("mousemove", (e) => this.onMouseMove(e));
-        // window.addEventListener("mouseup", (e) => this.onMouseUp(e));
-        this._boundOnMouseMove = this.onMouseMove.bind(this);
-        this._boundOnMouseUp = this.onMouseUp.bind(this);
-        window.addEventListener("mousemove", this._boundOnMouseMove);
-        window.addEventListener("mouseup", this._boundOnMouseUp);
-
-        // --- Player Controls ---
-        const playerControls = document.createElement("div");
-        playerControls.className = "pr-player-controls";
-
-        this.playBtn = document.createElement("button");
-        this.playBtn.className = "pr-icon-btn";
-        this.playBtn.style.padding = "4px";
-        this.playBtn.innerHTML = ICONS.play;
-        this.playBtn.title = "Play/Pause Audio";
-        this.playBtn.addEventListener("click", () => this.togglePlay());
-
-        this.loopBtn = document.createElement("button");
-        this.loopBtn.className = "pr-icon-btn";
-        this.loopBtn.style.padding = "4px";
-        this.loopBtn.innerHTML = ICONS.loop;
-        this.loopBtn.title = "Toggle Loop";
-        this.loopBtn.addEventListener("click", () => this.toggleLoop());
-
-        this.seekBar = document.createElement("input");
-        this.seekBar.type = "range";
-        this.seekBar.className = "pr-seek-bar";
-        this.seekBar.min = "0";
-        this.seekBar.value = "0";
-        this.seekBar.style.flex = "1"; // take up remaining space
-        this.seekBar.addEventListener("input", (e) => {
-            this.currentFrame = parseInt(e.target.value, 10);
-            this.render();
-            if (this.isPlaying) {
-                this.playAudio();
-            }
-        });
-
-        // --- Zoom Controls ---
-        const zoomControls = document.createElement("div");
-        zoomControls.className = "pr-zoom-controls";
-
-        const zoomOutBtn = document.createElement("button");
-        zoomOutBtn.className = "pr-icon-btn";
-        zoomOutBtn.style.padding = "4px";
-        zoomOutBtn.innerHTML = ICONS.minus;
-        zoomOutBtn.title = "Zoom Out";
-        zoomOutBtn.addEventListener("click", () => {
-            const currentZoom = parseFloat(this.zoomSlider.value);
-            this.zoomSlider.value = Math.max(1, currentZoom - 0.5);
-            this.zoomSlider.dispatchEvent(new Event("input"));
-        });
-
-        this.zoomSlider = document.createElement("input");
-        this.zoomSlider.type = "range";
-        this.zoomSlider.className = "pr-zoom-slider";
-        this.zoomSlider.min = "1";
-        this.zoomSlider.max = "1"; // Updated dynamically via updateZoomSliderMax()
-        this.zoomSlider.step = "0.1";
-        this.zoomSlider.value = "1";
-        this.zoomSlider.title = "Zoom Level";
-        this.zoomSlider.addEventListener("input", (e) => {
-            this.zoomLevel = parseFloat(e.target.value);
-
-            const viewportWidth = this.viewport.clientWidth;
-            const newCanvasWidth = Math.max(viewportWidth, viewportWidth * this.zoomLevel);
-
-            this.canvas.style.width = newCanvasWidth + "px";
-            this.resizeCanvas(newCanvasWidth);
-            this._lastWidth = viewportWidth;
-            this._lastZoom = this.zoomLevel;
-
-            // Keep playhead centered
-            const totalFrames = this.getVisualDurationFrames();
-            const playheadRatio = this.currentFrame / totalFrames;
-            const newPlayheadX = playheadRatio * newCanvasWidth;
-            this.viewport.scrollLeft = newPlayheadX - (viewportWidth / 2);
-        });
-
-        const zoomInBtn = document.createElement("button");
-        zoomInBtn.className = "pr-icon-btn";
-        zoomInBtn.style.padding = "4px";
-        zoomInBtn.innerHTML = ICONS.plus;
-        zoomInBtn.title = "Zoom In";
-        zoomInBtn.addEventListener("click", () => {
-            const currentZoom = parseFloat(this.zoomSlider.value);
-            this.zoomSlider.value = Math.min(this.getMaxZoom(), currentZoom + 0.5);
-            this.zoomSlider.dispatchEvent(new Event("input"));
-        });
-
-        const zoomFitBtn = document.createElement("button");
-        zoomFitBtn.className = "pr-icon-btn";
-        zoomFitBtn.style.padding = "4px";
-        zoomFitBtn.style.marginLeft = "4px";
-        zoomFitBtn.innerHTML = ICONS.fit;
-        zoomFitBtn.title = "Zoom to Fit (show full timeline)";
-        zoomFitBtn.addEventListener("click", () => {
-            this.zoomLevel = 1;
-            this.zoomSlider.value = 1;
-            const viewportWidth = this.viewport.clientWidth;
-            this.canvas.style.width = viewportWidth + "px";
-            this.resizeCanvas(viewportWidth);
-            this._lastWidth = viewportWidth;
-            this._lastZoom = 1;
-            this.viewport.scrollLeft = 0;
-        });
-
-        zoomControls.appendChild(zoomOutBtn);
-        zoomControls.appendChild(this.zoomSlider);
-        zoomControls.appendChild(zoomInBtn);
-        zoomControls.appendChild(zoomFitBtn);
-
-        playerControls.appendChild(this.playBtn);
-        playerControls.appendChild(this.loopBtn);
-        playerControls.appendChild(this.seekBar);
-        playerControls.appendChild(zoomControls);
-
-
-        // --- Guide Strength Slider ---
-        this.strengthRow = document.createElement("div");
-        this.strengthRow.className = "pr-strength-row";
-
-        const strengthLabel = document.createElement("span");
-        strengthLabel.className = "pr-strength-label";
-        strengthLabel.textContent = "Guide Strength:";
-
-        this.strengthValue = document.createElement("input");
-        this.strengthValue.type = "text";
-        this.strengthValue.className = "pr-strength-input";
-        this.strengthValue.value = "1.00";
-        this.strengthValue.disabled = true;
-        this.strengthValue.style.cursor = "ew-resize";
-
-        // Dragging logic for guide strength
-        let isDragging = false;
-        let startX = 0;
-        let startVal = 0;
-        let hasMoved = false;
+            isDragging = false;
+        };
 
         this.strengthValue.addEventListener("mousedown", (e) => {
             if (this.strengthValue.disabled) return;
             startX = e.clientX;
             startVal = parseFloat(this.strengthValue.value) || 1.0;
             hasMoved = false;
-
-            const onMouseMove = (moveEvent) => {
-                const deltaX = moveEvent.clientX - startX;
-                if (Math.abs(deltaX) > 3) {
-                    hasMoved = true;
-                    isDragging = true;
-                }
-
-                if (isDragging) {
-                    moveEvent.preventDefault();
-                    const sensitivity = 0.002;
-                    let newVal = startVal + deltaX * sensitivity;
-
-                    if (newVal < 0) newVal = 0;
-                    if (newVal > 1) newVal = 1;
-
-                    this.strengthValue.value = newVal.toFixed(2);
-
-                    if (this.selectionType === "image" && this.timeline.segments[this.selectedIndex]) {
-                        const seg = this.timeline.segments[this.selectedIndex];
-                        if (seg.type !== "text") {
-                            seg.guideStrength = newVal;
-                            this.commitChanges();
-                        }
-                    }
-                }
-            };
-
-            const onMouseUp = () => {
-                document.removeEventListener("mousemove", onMouseMove);
-                document.removeEventListener("mouseup", onMouseUp);
-
-                if (!hasMoved) {
-                    this.strengthValue.focus();
-                    this.strengthValue.select();
-                }
-                isDragging = false;
-            };
-
-            document.addEventListener("mousemove", onMouseMove);
-            document.addEventListener("mouseup", onMouseUp);
+            document.addEventListener("mousemove", onMove);
+            document.addEventListener("mouseup", onUp);
         });
 
         this.strengthValue.addEventListener("change", (e) => {
-            let val = parseFloat(e.target.value);
-            if (isNaN(val)) val = 1;
-            val = Math.max(0, Math.min(1, val));
+            let val = Math.max(0, Math.min(1, parseFloat(e.target.value) || 1));
             this.strengthValue.value = val.toFixed(2);
-            if (this.selectionType === "image" && this.timeline.segments[this.selectedIndex]) {
-                const seg = this.timeline.segments[this.selectedIndex];
-                if (seg.type !== "text") {
-                    seg.guideStrength = val;
-                    this.commitChanges();
-                }
+            if (this.selectionType === "image" && this.timeline.segments[this.selectedIndex]?.type !== "text") {
+                this.timeline.segments[this.selectedIndex].guideStrength = val;
+                this.commitChanges();
             }
         });
-
-        this.strengthRow.appendChild(this.timeCodeDisplay);
-        this.strengthRow.appendChild(this.segmentBoundsDisplay);
-        this.strengthRow.appendChild(strengthLabel);
-        this.strengthRow.appendChild(this.strengthValue);
-
-
-        this.wrapper.appendChild(toolbar);
-        this.wrapper.appendChild(this.viewport);
-
-        const controlsGroup = document.createElement("div");
-        controlsGroup.className = "pr-controls-group";
-        controlsGroup.appendChild(this.strengthRow);
-        controlsGroup.appendChild(playerControls);
-        this.wrapper.appendChild(controlsGroup);
-        this.wrapper.appendChild(propContainer);
-
-        this.container.appendChild(this.wrapper);
     }
 
+    _attachGlobalEvents() {
+        // Keyboard mapping
+        this.handleKeyDown = (e) => {
+            const tag = document.activeElement?.tagName;
+            if (tag === "INPUT" || tag === "TEXTAREA" || !this._isHovering) return;
+
+            if ((e.key === "Delete" || e.key === "Backspace") && this.selectedIndex !== -1) {
+                this.deleteSelectedSegment();
+                e.preventDefault();
+                e.stopPropagation();
+            } else if (e.key === " " || e.code === "Space") {
+                this.togglePlay();
+                e.preventDefault();
+                e.stopPropagation();
+            }
+        };
+        window.addEventListener("keydown", this.handleKeyDown, true);
+
+        // Paste mapping
+        this.handlePaste = (e) => {
+            if (!this._isHovering || ["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName)) return;
+            const images = Array.from(e.clipboardData?.files || []).filter(f => f.type.startsWith("image/"));
+            if (images.length) {
+                this.handleImageUpload(images, this.currentFrame);
+                e.preventDefault();
+                e.stopPropagation();
+            }
+        };
+        window.addEventListener("paste", this.handlePaste, true);
+
+        // Bounded Window Mouse Events (Fixes memory leaks)
+        this._boundOnMouseMove = this.onMouseMove.bind(this);
+        this._boundOnMouseUp = this.onMouseUp.bind(this);
+        window.addEventListener("mousemove", this._boundOnMouseMove);
+        window.addEventListener("mouseup", this._boundOnMouseUp);
+
+        // Drag and Drop
+        this.wrapper.addEventListener("dragover", (e) => this._handleDragOver(e));
+        this.wrapper.addEventListener("dragleave", (e) => this._handleDragLeave(e));
+        this.wrapper.addEventListener("drop", (e) => this._handleDrop(e));
+    }
+
+    _handleDragOver(e) {
+        e.preventDefault();
+        this.wrapper.classList.add("drag-active");
+
+        const {x, y} = this.getMousePos(e);
+        const logicalWidth = this.canvas.offsetWidth;
+        const totalFrames = this.getVisualDurationFrames();
+        if (!logicalWidth || totalFrames <= 0) return;
+
+        const isAudioTrack = y > RULER_HEIGHT + this.blockHeight;
+        const trackType = isAudioTrack ? "audio" : "image";
+        const arrToModify = isAudioTrack ? this.timeline.audioSegments : this.timeline.segments;
+
+        if (!this._ghostSegmentId || this._ghostTrack !== trackType) {
+            this._ghostSegmentId = "GHOST_" + Date.now();
+            this._ghostTrack = trackType;
+            this._ghostInitialTimeline = JSON.parse(JSON.stringify(arrToModify));
+
+            const newLength = Math.max(1, this.getFrameRate() * 1);
+            let startFrame = clamp(Math.round((x * (totalFrames / logicalWidth)) - newLength / 2), 0, totalFrames - newLength);
+
+            this._ghostInitialTimeline.push({
+                id: this._ghostSegmentId,
+                start: startFrame,
+                length: newLength,
+                type: "ghost"
+            });
+        }
+
+        const mouseFrameX = x * (totalFrames / logicalWidth);
+        const ghost = this._ghostInitialTimeline.find(s => s.id === this._ghostSegmentId);
+
+        this._previewSegments = this._applyCenterDragPhysics(
+            this._ghostInitialTimeline, this._ghostSegmentId, mouseFrameX - ghost.length / 2,
+            mouseFrameX, totalFrames, totalFrames, logicalWidth
+        );
+
+        for (let ps of this._previewSegments) {
+            const orig = arrToModify.find(s => s.id === ps.id);
+            if (orig) Object.assign(ps, {videoEl: orig.videoEl, imgObj: orig.imgObj, thumbnails: orig.thumbnails});
+        }
+        this.render();
+    }
+
+    _handleDragLeave(e) {
+        const rect = this.wrapper.getBoundingClientRect();
+        if (e.clientX < rect.left || e.clientX >= rect.right || e.clientY < rect.top || e.clientY >= rect.bottom) {
+            this.wrapper.classList.remove("drag-active");
+            this._clearGhostState();
+            this.render();
+        }
+    }
+
+    _handleDrop(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.wrapper.classList.remove("drag-active");
+
+        let targetFrameStart = null;
+        let targetTrack = this._ghostTrack || "image";
+
+        if (this._ghostSegmentId && this._previewSegments) {
+            const ghost = this._previewSegments.find(s => s.id === this._ghostSegmentId);
+            if (ghost) targetFrameStart = ghost.resolvedStart !== undefined ? ghost.resolvedStart : ghost.start;
+        }
+        this._clearGhostState();
+        this.render();
+
+        if (e.dataTransfer.files?.length) {
+            const files = Array.from(e.dataTransfer.files);
+            const videos = files.filter(f => f.type.startsWith("video/"));
+            const audios = files.filter(f => f.type.startsWith("audio/"));
+            const images = files.filter(f => f.type.startsWith("image/"));
+
+            if (videos.length) this.handleVideoUpload(videos, targetFrameStart);
+            else if (audios.length && (targetTrack === "audio" || !images.length)) this.handleAudioUpload(audios, targetFrameStart);
+            else if (images.length) this.handleImageUpload(images, targetFrameStart);
+        }
+    }
+
+    _clearGhostState() {
+        this._ghostSegmentId = this._ghostTrack = this._ghostInitialTimeline = this._previewSegments = null;
+    }
+
+    //
+    // createDOM() {
+    //     console.log(PluginName, "Creating Dom")
+    //     // --- Full Panel Loading Overlay ---
+    //     this.wrapper = document.createElement("div");
+    //     this.wrapper.className = "pr-wrapper";
+    //     this.wrapper.style.position = "relative"; // Ensure it can contain absolute elements
+    //
+    //     // --- Full Panel Loading Overlay ---
+    //     this.loadingOverlay = document.createElement("div");
+    //     this.loadingOverlay.className = "pr-overlay";
+    //     this.loadingOverlay.innerHTML = `
+    //                 <div class="pr-spinner"></div>
+    //                 <div>✨ Analyzing scenes with Vision Model and writing prompts...</div>
+    //             `;
+    //
+    //     this.wrapper.appendChild(this.loadingOverlay);
+    //
+    //     this.wrapper.addEventListener("mouseenter", () => {
+    //         this._isHovering = true;
+    //     });
+    //     this.wrapper.addEventListener("mouseleave", () => {
+    //         this._isHovering = false;
+    //     });
+    //
+    //     this.handleKeyDown = (e) => {
+    //         const activeTag = document.activeElement ? document.activeElement.tagName : "";
+    //         if (activeTag === "INPUT" || activeTag === "TEXTAREA") return;
+    //
+    //         if ((e.key === "Delete" || e.key === "Backspace") && this.selectedIndex !== -1 && this._isHovering) {
+    //             this.deleteSelectedSegment();
+    //             e.stopPropagation();
+    //             e.stopImmediatePropagation();
+    //             e.preventDefault();
+    //         } else if ((e.key === " " || e.code === "Space") && this._isHovering) {
+    //             this.togglePlay();
+    //             e.stopPropagation();
+    //             e.stopImmediatePropagation();
+    //             e.preventDefault();
+    //         }
+    //     };
+    //     window.addEventListener("keydown", this.handleKeyDown, true);
+    //
+    //     this.handlePaste = (e) => {
+    //         if (this._isHovering) {
+    //             const activeTag = document.activeElement ? document.activeElement.tagName : "";
+    //             if (activeTag === "INPUT" || activeTag === "TEXTAREA") return;
+    //
+    //             if (e.clipboardData && e.clipboardData.files && e.clipboardData.files.length > 0) {
+    //                 const imageFiles = Array.from(e.clipboardData.files).filter(f => f.type.startsWith("image/"));
+    //                 if (imageFiles.length > 0) {
+    //                     this.handleImageUpload(imageFiles, this.currentFrame);
+    //                     e.preventDefault();
+    //                     e.stopPropagation();
+    //                 }
+    //             }
+    //         }
+    //     };
+    //     window.addEventListener("paste", this.handlePaste, true);
+    //
+    //     this.fileInput = document.createElement("input");
+    //     this.fileInput.type = "file";
+    //     this.fileInput.accept = "image/*";
+    //     this.fileInput.multiple = true;
+    //     this.fileInput.style.display = "none";
+    //     this.fileInput.addEventListener("change", (e) => this.handleImageUpload(e.target.files));
+    //
+    //     this.audioFileInput = document.createElement("input");
+    //     this.audioFileInput.type = "file";
+    //     this.audioFileInput.accept = "audio/*";
+    //     this.audioFileInput.multiple = true;
+    //     this.audioFileInput.style.display = "none";
+    //     this.audioFileInput.addEventListener("change", (e) => this.handleAudioUpload(e.target.files));
+    //
+    //     this.videoFileInput = document.createElement("input");
+    //     this.videoFileInput.type = "file";
+    //     this.videoFileInput.accept = "video/*";
+    //     this.videoFileInput.multiple = true;
+    //     this.videoFileInput.style.display = "none";
+    //     this.videoFileInput.addEventListener("change", (e) => this.handleVideoUpload(e.target.files));
+    //
+    //     // --- Toolbar ---
+    //     const toolbar = document.createElement("div");
+    //     toolbar.className = "pr-toolbar";
+    //
+    //     const actionGroup = this._buildActionGroup();
+    //     actionGroup.appendChild(this.fileInput);
+    //     actionGroup.appendChild(this.audioFileInput);
+    //     actionGroup.appendChild(this.videoFileInput);
+    //
+    //     toolbar.appendChild(actionGroup);
+    //
+    //     const rightGroup = document.createElement("div");
+    //     rightGroup.className = "pr-right-group";
+    //
+    //     this.segmentBoundsDisplay = document.createElement("div");
+    //     this.segmentBoundsDisplay.className = "pr-segment-bounds";
+    //     this.segmentBoundsDisplay.textContent = "Start: - | End: -";
+    //
+    //     this.timeCodeDisplay = document.createElement("div");
+    //     this.timeCodeDisplay.className = "pr-timecode";
+    //     this.timeCodeDisplay.textContent = this.formatTime(0);
+    //
+    //     const settingsBtn = document.createElement("button");
+    //     settingsBtn.className = "pr-btn pr-settings-btn";
+    //     settingsBtn.innerHTML = ICONS.gear;
+    //     settingsBtn.title = "Settings";
+    //     settingsBtn.addEventListener("click", (e) => {
+    //         e.stopPropagation();
+    //         if (this._settingsMenu) {
+    //             this.dismissSettingsMenu();
+    //         } else {
+    //             this.showSettingsMenu(settingsBtn);
+    //         }
+    //     });
+    //
+    //     const btnGroup = document.createElement("div");
+    //     btnGroup.className = "pr-btn-group"
+    //
+    //     // btnGroup.appendChild(toggleBtn);
+    //     btnGroup.appendChild(this._createAudioModeControl());
+    //     btnGroup.appendChild(this._createHelpButton());
+    //     btnGroup.appendChild(settingsBtn);
+    //
+    //     rightGroup.appendChild(btnGroup);
+    //
+    //     toolbar.appendChild(rightGroup);
+    //
+    //     // --- Canvas & Viewport ---
+    //     this.viewport = document.createElement("div");
+    //     this.viewport.className = "pr-timeline-viewport";
+    //
+    //     this.viewport.addEventListener("wheel", (e) => {
+    //         if (e.ctrlKey || e.metaKey) {
+    //             e.preventDefault();
+    //             e.stopPropagation();
+    //
+    //             let zoomDelta = e.deltaY > 0 ? -0.5 : 0.5;
+    //             this.zoomLevel = Math.max(1, Math.min(this.getMaxZoom(), this.zoomLevel + zoomDelta));
+    //             if (this.zoomSlider) this.zoomSlider.value = this.zoomLevel;
+    //
+    //             const oldWidth = this.canvas.offsetWidth;
+    //             const newWidth = this.viewport.clientWidth * this.zoomLevel;
+    //             const mouseX = e.clientX - this.viewport.getBoundingClientRect().left;
+    //             const scrollRatio = (this.viewport.scrollLeft + mouseX) / oldWidth;
+    //
+    //             this.canvas.style.width = newWidth + "px";
+    //             this.viewport.scrollLeft = scrollRatio * newWidth - mouseX;
+    //         }
+    //     }, {passive: false, capture: true});
+    //
+    //     this.canvas = document.createElement("canvas");
+    //     this.canvas.className = "pr-canvas";
+    //     this.ctx = this.canvas.getContext("2d");
+    //     this.canvas.style.width = "100%";
+    //
+    //     this.viewport.appendChild(this.canvas);
+    //
+    //     this.canvas.addEventListener("mousedown", (e) => this.onMouseDown(e));
+    //     this.canvas.addEventListener("contextmenu", (e) => this.onContextMenu(e));
+    //     this.canvas.style.height = `${CANVAS_HEIGHT}px`;
+    //
+    //     // --- Content Area Container ---
+    //     const propContainer = document.createElement("div");
+    //     propContainer.className = "pr-prop-container";
+    //
+    //     // --- Hint row (persists across generations — VLM instruction per segment) ---
+    //     const hintRow = document.createElement("div");
+    //     hintRow.className = "pr-hint-row";
+    //
+    //     const hintLabel = document.createElement("span");
+    //     hintLabel.className = "pr-hint-label";
+    //     hintLabel.textContent = "✨ Hint";
+    //     hintLabel.title = "Stays intact after generation. Guides each image differently (e.g. 'balletto', 'lotta').";
+    //
+    //     this.hintInput = document.createElement("input");
+    //     this.hintInput.type = "text";
+    //     this.hintInput.className = "pr-hint-input";
+    //     this.hintInput.placeholder = "scene hint for ✨ generation (e.g. balletto, lotta, slow sunset walk)…";
+    //     this.hintInput.addEventListener("input", () => {
+    //         if (this.selectionType === "image" && this.timeline.segments[this.selectedIndex]) {
+    //             this.timeline.segments[this.selectedIndex].hint = this.hintInput.value;
+    //             this.commitChanges();
+    //         }
+    //     });
+    //
+    //     hintRow.appendChild(hintLabel);
+    //     hintRow.appendChild(this.hintInput);
+    //
+    //     // --- Text Area (Image/Text) ---
+    //     this.promptInput = document.createElement("textarea");
+    //     this.promptInput.className = "pr-prompt-area";
+    //     this.promptInput.placeholder = "Generated prompt — edit freely. Fill ✨ Hint above to guide the next generation.";
+    //     this.promptInput.addEventListener("input", () => {
+    //         if (this.selectionType === "image" && this.timeline.segments[this.selectedIndex]) {
+    //             this.timeline.segments[this.selectedIndex].prompt = this.promptInput.value;
+    //             this.commitChanges();
+    //         }
+    //     });
+    //
+    //     // --- Audio Info Area ---
+    //     this.audioInfoArea = document.createElement("div");
+    //     this.audioInfoArea.className = "pr-audio-info";
+    //
+    //     propContainer.appendChild(hintRow);
+    //     propContainer.appendChild(this.promptInput);
+    //     propContainer.appendChild(this.audioInfoArea);
+    //
+    //     this.wrapper.addEventListener("dragover", (e) => {
+    //         e.preventDefault();
+    //         this.wrapper.classList.add("drag-active");
+    //
+    //         const {x, y} = this.getMousePos(e);
+    //         const logicalWidth = this.canvas.offsetWidth;
+    //         const totalFrames = this.getVisualDurationFrames();
+    //         if (!logicalWidth || totalFrames <= 0) return;
+    //
+    //         const isAudioTrack = y > RULER_HEIGHT + this.blockHeight;
+    //         const trackType = isAudioTrack ? "audio" : "image";
+    //         const arrToModify = isAudioTrack ? this.timeline.audioSegments : this.timeline.segments;
+    //
+    //         if (!this._ghostSegmentId || this._ghostTrack !== trackType) {
+    //             this._ghostSegmentId = "GHOST_" + Date.now();
+    //             this._ghostTrack = trackType;
+    //             this._ghostInitialTimeline = JSON.parse(JSON.stringify(arrToModify));
+    //
+    //             const frameRate = this.getFrameRate();
+    //             const newLength = Math.max(1, frameRate * 1);
+    //
+    //             let mouseFrameX = x * (totalFrames / logicalWidth);
+    //             let startFrame = clamp(Math.round(mouseFrameX - newLength / 2), 0, totalFrames - newLength);
+    //
+    //             this._ghostInitialTimeline.push({
+    //                 id: this._ghostSegmentId,
+    //                 start: startFrame,
+    //                 length: newLength,
+    //                 type: "ghost"
+    //             });
+    //         }
+    //
+    //         let mouseFrameX = x * (totalFrames / logicalWidth);
+    //         const ghost = this._ghostInitialTimeline.find(s => s.id === this._ghostSegmentId);
+    //         let D_mouse_start = mouseFrameX - ghost.length / 2;
+    //
+    //         this._previewSegments = this._applyCenterDragPhysics(
+    //             this._ghostInitialTimeline,
+    //             this._ghostSegmentId,
+    //             D_mouse_start,
+    //             mouseFrameX,
+    //             totalFrames,
+    //             totalFrames,
+    //             logicalWidth
+    //         );
+    //
+    //         for (let ps of this._previewSegments) {
+    //             const orig = arrToModify.find(s => s.id === ps.id);
+    //             if (orig) {
+    //                 ps.videoEl = orig.videoEl;
+    //                 ps.imgObj = orig.imgObj;
+    //                 if (orig.thumbnails) ps.thumbnails = orig.thumbnails;
+    //             }
+    //         }
+    //
+    //         this.render();
+    //     });
+    //
+    //     this.wrapper.addEventListener("dragleave", (e) => {
+    //         const rect = this.wrapper.getBoundingClientRect();
+    //         if (e.clientX < rect.left || e.clientX >= rect.right ||
+    //             e.clientY < rect.top || e.clientY >= rect.bottom) {
+    //             this.wrapper.classList.remove("drag-active");
+    //             this._ghostSegmentId = null;
+    //             this._ghostTrack = null;
+    //             this._ghostInitialTimeline = null;
+    //             this._previewSegments = null;
+    //             this.render();
+    //         }
+    //     });
+    //
+    //     this.wrapper.addEventListener("drop", (e) => {
+    //         e.preventDefault();
+    //         e.stopPropagation();
+    //         this.wrapper.classList.remove("drag-active");
+    //
+    //         let targetFrameStart = null;
+    //         let targetTrack = this._ghostTrack || "image";
+    //
+    //         if (this._ghostSegmentId && this._previewSegments) {
+    //             const ghost = this._previewSegments.find(s => s.id === this._ghostSegmentId);
+    //             if (ghost) {
+    //                 targetFrameStart = ghost.resolvedStart !== undefined ? ghost.resolvedStart : ghost.start;
+    //             }
+    //         }
+    //         this._ghostSegmentId = null;
+    //         this._ghostTrack = null;
+    //         this._ghostInitialTimeline = null;
+    //         this._previewSegments = null;
+    //         this.render();
+    //
+    //         if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+    //             const imageFiles = [];
+    //             const audioFiles = [];
+    //             const videoFiles = [];
+    //             for (let file of e.dataTransfer.files) {
+    //                 if (file.type.startsWith("video/")) videoFiles.push(file);
+    //                 else if (file.type.startsWith("audio/")) audioFiles.push(file);
+    //                 else if (file.type.startsWith("image/")) imageFiles.push(file);
+    //             }
+    //
+    //             // Let implicit intent handle mixing drops: use the track we hovered over
+    //             // for the first type we process, or fallback.
+    //             if (videoFiles.length > 0) {
+    //                 this.handleVideoUpload(videoFiles, targetFrameStart);
+    //             } else if (audioFiles.length > 0 && (targetTrack === "audio" || imageFiles.length === 0)) {
+    //                 this.handleAudioUpload(audioFiles, targetFrameStart);
+    //             } else if (imageFiles.length > 0) {
+    //                 this.handleImageUpload(imageFiles, targetFrameStart);
+    //             }
+    //         }
+    //     });
+    //
+    //     // Because these are anonymous functions, they cannot be targeted for removal. When a user deletes the LTXDirector node in ComfyUI, your destroy() method runs, but these listeners persist forever. Every time the node is deleted and added, a new set of ghost listeners is created, holding the entire TimelineEditor class (and all its canvases/images) in memory.
+    //     //
+    //     // Fix: Bind them to the class instance so they can be removed in destroy().
+    //
+    //     // window.addEventListener("mousemove", (e) => this.onMouseMove(e));
+    //     // window.addEventListener("mouseup", (e) => this.onMouseUp(e));
+    //     this._boundOnMouseMove = this.onMouseMove.bind(this);
+    //     this._boundOnMouseUp = this.onMouseUp.bind(this);
+    //     window.addEventListener("mousemove", this._boundOnMouseMove);
+    //     window.addEventListener("mouseup", this._boundOnMouseUp);
+    //
+    //     // --- Player Controls ---
+    //     const playerControls = document.createElement("div");
+    //     playerControls.className = "pr-player-controls";
+    //
+    //     this.playBtn = document.createElement("button");
+    //     this.playBtn.className = "pr-icon-btn";
+    //     this.playBtn.style.padding = "4px";
+    //     this.playBtn.innerHTML = ICONS.play;
+    //     this.playBtn.title = "Play/Pause Audio";
+    //     this.playBtn.addEventListener("click", () => this.togglePlay());
+    //
+    //     this.loopBtn = document.createElement("button");
+    //     this.loopBtn.className = "pr-icon-btn";
+    //     this.loopBtn.style.padding = "4px";
+    //     this.loopBtn.innerHTML = ICONS.loop;
+    //     this.loopBtn.title = "Toggle Loop";
+    //     this.loopBtn.addEventListener("click", () => this.toggleLoop());
+    //
+    //     this.seekBar = document.createElement("input");
+    //     this.seekBar.type = "range";
+    //     this.seekBar.className = "pr-seek-bar";
+    //     this.seekBar.min = "0";
+    //     this.seekBar.value = "0";
+    //     this.seekBar.style.flex = "1"; // take up remaining space
+    //     this.seekBar.addEventListener("input", (e) => {
+    //         this.currentFrame = parseInt(e.target.value, 10);
+    //         this.render();
+    //         if (this.isPlaying) {
+    //             this.playAudio();
+    //         }
+    //     });
+    //
+    //     // --- Zoom Controls ---
+    //     const zoomControls = document.createElement("div");
+    //     zoomControls.className = "pr-zoom-controls";
+    //
+    //     const zoomOutBtn = document.createElement("button");
+    //     zoomOutBtn.className = "pr-icon-btn";
+    //     zoomOutBtn.style.padding = "4px";
+    //     zoomOutBtn.innerHTML = ICONS.minus;
+    //     zoomOutBtn.title = "Zoom Out";
+    //     zoomOutBtn.addEventListener("click", () => {
+    //         const currentZoom = parseFloat(this.zoomSlider.value);
+    //         this.zoomSlider.value = Math.max(1, currentZoom - 0.5);
+    //         this.zoomSlider.dispatchEvent(new Event("input"));
+    //     });
+    //
+    //     this.zoomSlider = document.createElement("input");
+    //     this.zoomSlider.type = "range";
+    //     this.zoomSlider.className = "pr-zoom-slider";
+    //     this.zoomSlider.min = "1";
+    //     this.zoomSlider.max = "1"; // Updated dynamically via updateZoomSliderMax()
+    //     this.zoomSlider.step = "0.1";
+    //     this.zoomSlider.value = "1";
+    //     this.zoomSlider.title = "Zoom Level";
+    //     this.zoomSlider.addEventListener("input", (e) => {
+    //         this.zoomLevel = parseFloat(e.target.value);
+    //
+    //         const viewportWidth = this.viewport.clientWidth;
+    //         const newCanvasWidth = Math.max(viewportWidth, viewportWidth * this.zoomLevel);
+    //
+    //         this.canvas.style.width = newCanvasWidth + "px";
+    //         this.resizeCanvas(newCanvasWidth);
+    //         this._lastWidth = viewportWidth;
+    //         this._lastZoom = this.zoomLevel;
+    //
+    //         // Keep playhead centered
+    //         const totalFrames = this.getVisualDurationFrames();
+    //         const playheadRatio = this.currentFrame / totalFrames;
+    //         const newPlayheadX = playheadRatio * newCanvasWidth;
+    //         this.viewport.scrollLeft = newPlayheadX - (viewportWidth / 2);
+    //     });
+    //
+    //     const zoomInBtn = document.createElement("button");
+    //     zoomInBtn.className = "pr-icon-btn";
+    //     zoomInBtn.style.padding = "4px";
+    //     zoomInBtn.innerHTML = ICONS.plus;
+    //     zoomInBtn.title = "Zoom In";
+    //     zoomInBtn.addEventListener("click", () => {
+    //         const currentZoom = parseFloat(this.zoomSlider.value);
+    //         this.zoomSlider.value = Math.min(this.getMaxZoom(), currentZoom + 0.5);
+    //         this.zoomSlider.dispatchEvent(new Event("input"));
+    //     });
+    //
+    //     const zoomFitBtn = document.createElement("button");
+    //     zoomFitBtn.className = "pr-icon-btn";
+    //     zoomFitBtn.style.padding = "4px";
+    //     zoomFitBtn.style.marginLeft = "4px";
+    //     zoomFitBtn.innerHTML = ICONS.fit;
+    //     zoomFitBtn.title = "Zoom to Fit (show full timeline)";
+    //     zoomFitBtn.addEventListener("click", () => {
+    //         this.zoomLevel = 1;
+    //         this.zoomSlider.value = 1;
+    //         const viewportWidth = this.viewport.clientWidth;
+    //         this.canvas.style.width = viewportWidth + "px";
+    //         this.resizeCanvas(viewportWidth);
+    //         this._lastWidth = viewportWidth;
+    //         this._lastZoom = 1;
+    //         this.viewport.scrollLeft = 0;
+    //     });
+    //
+    //     zoomControls.appendChild(zoomOutBtn);
+    //     zoomControls.appendChild(this.zoomSlider);
+    //     zoomControls.appendChild(zoomInBtn);
+    //     zoomControls.appendChild(zoomFitBtn);
+    //
+    //     playerControls.appendChild(this.playBtn);
+    //     playerControls.appendChild(this.loopBtn);
+    //     playerControls.appendChild(this.seekBar);
+    //     playerControls.appendChild(zoomControls);
+    //
+    //
+    //     // --- Guide Strength Slider ---
+    //     this.strengthRow = document.createElement("div");
+    //     this.strengthRow.className = "pr-strength-row";
+    //
+    //     const strengthLabel = document.createElement("span");
+    //     strengthLabel.className = "pr-strength-label";
+    //     strengthLabel.textContent = "Guide Strength:";
+    //
+    //     this.strengthValue = document.createElement("input");
+    //     this.strengthValue.type = "text";
+    //     this.strengthValue.className = "pr-strength-input";
+    //     this.strengthValue.value = "1.00";
+    //     this.strengthValue.disabled = true;
+    //     this.strengthValue.style.cursor = "ew-resize";
+    //
+    //     // Dragging logic for guide strength
+    //     let isDragging = false;
+    //     let startX = 0;
+    //     let startVal = 0;
+    //     let hasMoved = false;
+    //
+    //     this.strengthValue.addEventListener("mousedown", (e) => {
+    //         if (this.strengthValue.disabled) return;
+    //         startX = e.clientX;
+    //         startVal = parseFloat(this.strengthValue.value) || 1.0;
+    //         hasMoved = false;
+    //
+    //         const onMouseMove = (moveEvent) => {
+    //             const deltaX = moveEvent.clientX - startX;
+    //             if (Math.abs(deltaX) > 3) {
+    //                 hasMoved = true;
+    //                 isDragging = true;
+    //             }
+    //
+    //             if (isDragging) {
+    //                 moveEvent.preventDefault();
+    //                 const sensitivity = 0.002;
+    //                 let newVal = startVal + deltaX * sensitivity;
+    //
+    //                 if (newVal < 0) newVal = 0;
+    //                 if (newVal > 1) newVal = 1;
+    //
+    //                 this.strengthValue.value = newVal.toFixed(2);
+    //
+    //                 if (this.selectionType === "image" && this.timeline.segments[this.selectedIndex]) {
+    //                     const seg = this.timeline.segments[this.selectedIndex];
+    //                     if (seg.type !== "text") {
+    //                         seg.guideStrength = newVal;
+    //                         this.commitChanges();
+    //                     }
+    //                 }
+    //             }
+    //         };
+    //
+    //         const onMouseUp = () => {
+    //             document.removeEventListener("mousemove", onMouseMove);
+    //             document.removeEventListener("mouseup", onMouseUp);
+    //
+    //             if (!hasMoved) {
+    //                 this.strengthValue.focus();
+    //                 this.strengthValue.select();
+    //             }
+    //             isDragging = false;
+    //         };
+    //
+    //         document.addEventListener("mousemove", onMouseMove);
+    //         document.addEventListener("mouseup", onMouseUp);
+    //     });
+    //
+    //     this.strengthValue.addEventListener("change", (e) => {
+    //         let val = parseFloat(e.target.value);
+    //         if (isNaN(val)) val = 1;
+    //         val = Math.max(0, Math.min(1, val));
+    //         this.strengthValue.value = val.toFixed(2);
+    //         if (this.selectionType === "image" && this.timeline.segments[this.selectedIndex]) {
+    //             const seg = this.timeline.segments[this.selectedIndex];
+    //             if (seg.type !== "text") {
+    //                 seg.guideStrength = val;
+    //                 this.commitChanges();
+    //             }
+    //         }
+    //     });
+    //
+    //     this.strengthRow.appendChild(this.timeCodeDisplay);
+    //     this.strengthRow.appendChild(this.segmentBoundsDisplay);
+    //     this.strengthRow.appendChild(strengthLabel);
+    //     this.strengthRow.appendChild(this.strengthValue);
+    //
+    //     this.wrapper.appendChild(toolbar);
+    //     this.wrapper.appendChild(this.viewport);
+    //
+    //     const controlsGroup = document.createElement("div");
+    //     controlsGroup.className = "pr-controls-group";
+    //     controlsGroup.appendChild(this.strengthRow);
+    //     controlsGroup.appendChild(playerControls);
+    //     this.wrapper.appendChild(controlsGroup);
+    //     this.wrapper.appendChild(propContainer);
+    //
+    //     this.container.appendChild(this.wrapper);
+    // }
+    //
 
     _createAudioModeControl() {
         const audioModeWrapper = document.createElement("div");
-        audioModeWrapper.style.display = "flex";
-        audioModeWrapper.style.alignItems = "center";
-        audioModeWrapper.style.gap = "6px";
-        audioModeWrapper.style.marginRight = "6px";
+        audioModeWrapper.className = "pr-audio-mode-wrapper";
 
         const audioLabel = document.createElement("span");
         audioLabel.textContent = "AUDIO:";
-        audioLabel.style.fontSize = "10px";
-        audioLabel.style.fontWeight = "700";
-        audioLabel.style.color = "#888888";
-        audioLabel.style.letterSpacing = "0.5px";
+        audioLabel.className = "pr-audio-label";
 
         const audioModeCtrl = document.createElement("div");
         audioModeCtrl.className = "pr-segmented-control";
 
         // Map short labels to the exact Python values
+        // Map short labels to the exact Python values using our JS Enum
         const audioModes = [
             {
                 label: "✨ Auto-Gen",
-                value: "Generate From Scratch",
+                value: AudioMode.GENERATE,
                 title: "Generate new audio from scratch (ignores timeline)"
             },
             {
                 label: "🔄 Remix",
-                value: "Template (Audio2Audio)",
+                value: AudioMode.TEMPLATE,
                 title: "Template mode: AI denoises your timeline audio (Dubbing)"
             },
             {
                 label: "🔒 Preserve",
-                value: "Preserve (Inpaint Gaps)",
+                value: AudioMode.PRESERVE,
                 title: "Preserve mode: Locks timeline audio, AI only fills gaps"
             }
         ];
@@ -1818,12 +1553,7 @@ class TimelineEditor {
 
     _createHelpButton() {
         const helpBtn = document.createElement("button");
-        helpBtn.className = "pr-btn";
-        helpBtn.style.padding = "6px";
-        helpBtn.style.justifyContent = "center";
-        helpBtn.style.width = "28px";
-        helpBtn.style.height = "28px";
-        helpBtn.style.boxSizing = "border-box";
+        helpBtn.className = "pr-btn pr-settings-btn";
         helpBtn.innerHTML = "?";
         helpBtn.title = "Help / Documentation";
         helpBtn.addEventListener("click", (e) => {
@@ -2379,6 +2109,7 @@ class TimelineEditor {
         }
     }
 
+
     // --- Rendering logic ---
     render() {
         const width = this.canvas.offsetWidth || this._lastWidth;
@@ -2388,15 +2119,12 @@ class TimelineEditor {
         if (!width || width <= 0) return;
 
         this.ctx.clearRect(0, 0, width, height);
-
-
         // Render Track Backgrounds
         this.ctx.fillStyle = "#111111"; // Image track bg
         // this.ctx.fillStyle = "#111111"; // Image track bg
         this.ctx.fillRect(0, RULER_HEIGHT, width, this.blockHeight);
         this.ctx.fillStyle = "#111111"; // Audio track bg
         this.ctx.fillRect(0, RULER_HEIGHT + this.blockHeight, width, this.audioTrackHeight);
-
 
         // Determine which track the preview belongs to.
         // _ghostTrack is set during HTML file drag-and-drop.
@@ -2821,33 +2549,6 @@ class TimelineEditor {
             }
         }
 
-        // // --- Out-of-duration shadow overlay ---
-        // // Draw a translucent black mask over the region beyond the actual output duration
-        // // so the user can clearly see which content will be included in the render.
-        // const outputFrames = this.getDurationFrames();
-        // if (outputFrames < totalFrames) {
-        //   const cutoffX = (outputFrames / totalFrames) * width;
-        //   // Semi-transparent black overlay on both tracks
-        //   this.ctx.fillStyle = "rgba(0, 0, 0, 0.45)";
-        //   this.ctx.fillRect(cutoffX, RULER_HEIGHT, width - cutoffX, this.blockHeight + this.audioTrackHeight);
-        //   // Subtle tinted ruler overlay
-        //   this.ctx.fillStyle = "rgba(0, 0, 0, 0.25)";
-        //   this.ctx.fillRect(cutoffX, 0, width - cutoffX, RULER_HEIGHT);
-        //   /*
-        //   // Dashed boundary line at the output duration cutoff
-        //   this.ctx.save();
-        //   this.ctx.strokeStyle = "rgba(255, 80, 80, 0.7)";
-        //   this.ctx.lineWidth = 1.5;
-        //   this.ctx.setLineDash([5, 4]);
-        //   this.ctx.beginPath();
-        //   this.ctx.moveTo(cutoffX, 0);
-        //   this.ctx.lineTo(cutoffX, CANVAS_HEIGHT);
-        //   this.ctx.stroke();
-        //   this.ctx.setLineDash([]);
-        //   this.ctx.restore();
-        //   */
-        // }
-
         // --- Out-of-duration shadow overlay ---
         const outputFrames = this.getDurationFrames();
         if (outputFrames < totalFrames) {
@@ -2856,24 +2557,21 @@ class TimelineEditor {
             this.ctx.fillRect(cutoffX, RULER_HEIGHT, width - cutoffX, this.blockHeight + this.audioTrackHeight);
             this.ctx.fillStyle = "rgba(0, 0, 0, 0.25)";
             this.ctx.fillRect(cutoffX, 0, width - cutoffX, RULER_HEIGHT);
-            /*
-      // Dashed boundary line at the output duration cutoff
-      this.ctx.save();
-      this.ctx.strokeStyle = "rgba(255, 80, 80, 0.7)";
-      this.ctx.lineWidth = 1.5;
-      this.ctx.setLineDash([5, 4]);
-      this.ctx.beginPath();
-      this.ctx.moveTo(cutoffX, 0);
-      this.ctx.lineTo(cutoffX, CANVAS_HEIGHT);
-      this.ctx.stroke();
-      this.ctx.setLineDash([]);
-      this.ctx.restore();
-      */
         }
+        // Dashed boundary line at the output duration cutoff
+        // this.ctx.save();
+        // this.ctx.strokeStyle = "rgba(255, 80, 80, 0.7)";
+        // this.ctx.lineWidth = 1.5;
+        // this.ctx.setLineDash([5, 4]);
+        // this.ctx.beginPath();
+        // this.ctx.moveTo(cutoffX, 0);
+        // this.ctx.lineTo(cutoffX, CANVAS_HEIGHT);
+        // this.ctx.stroke();
+        // this.ctx.setLineDash([]);
+        // this.ctx.restore();
 
         // ====================================================================
         // --- Render Relative Crop Shadow Overlay (Start + Duration) ---
-        // ====================================================================
         const renderStartSecs = this.renderStartSecondsWidget ? (parseFloat(this.renderStartSecondsWidget.value) || 0.0) : 0.0;
         const renderDurationSecs = this.renderDurationSecondsWidget ? (parseFloat(this.renderDurationSecondsWidget.value) || 0.0) : 0.0;
 
@@ -3919,17 +3617,6 @@ class TimelineEditor {
             };
             menu.appendChild(openBtn);
 
-            const genPromptBtn = document.createElement("button");
-            genPromptBtn.className = "pr-gap-menu-btn";
-            genPromptBtn.innerHTML = `✨ Generate Prompt`;
-            genPromptBtn.onclick = () => {
-                this.dismissContextMenu();
-                const segIndex = this.timeline.segments.findIndex(s => s.id === seg.id);
-                if (segIndex !== -1) {
-                    this.generatePrompts(this._generatePromptsBtn, segIndex);
-                }
-            };
-            menu.appendChild(genPromptBtn);
         }
 
         if (trackType !== "audio") {
@@ -3945,6 +3632,18 @@ class TimelineEditor {
                 this.dismissContextMenu();
             };
             menu.appendChild(copyPromptBtn);
+
+            const genPromptBtn = document.createElement("button");
+            genPromptBtn.className = "pr-gap-menu-btn";
+            genPromptBtn.innerHTML = `✨ Generate Prompt`;
+            genPromptBtn.onclick = () => {
+                this.dismissContextMenu();
+                const segIndex = this.timeline.segments.findIndex(s => s.id === seg.id);
+                if (segIndex !== -1) {
+                    this.generatePrompts(this._generatePromptsBtn, segIndex);
+                }
+            };
+            menu.appendChild(genPromptBtn);
         }
 
         const copySegBtn = document.createElement("button");
@@ -4549,7 +4248,7 @@ class TimelineEditor {
         vlmTitle.textContent = "Prompt Writer (Qwen2.5-VL)";
         menu.appendChild(vlmTitle);
 
-        const vlmCfg = this._getVlmConfig();
+        const vlmCfg = _getVlmConfig();
 
         // Enable toggle
         const enabledCb = document.createElement("input");
@@ -4557,9 +4256,9 @@ class TimelineEditor {
         enabledCb.checked = vlmCfg.enabled;
         enabledCb.style.cursor = "pointer";
         enabledCb.addEventListener("change", () => {
-            const c = this._getVlmConfig();
+            const c = _getVlmConfig();
             c.enabled = enabledCb.checked;
-            this._setVlmConfig(c);
+            _setVlmConfig(c);
             if (this._generatePromptsBtn) {
                 this._generatePromptsBtn.disabled = !c.enabled;
                 this._generatePromptsBtn.title = c.enabled
@@ -4571,8 +4270,7 @@ class TimelineEditor {
 
         // Vision model dropdown
         const modelSel = document.createElement("select");
-        modelSel.className = "pr-settings-field";
-        modelSel.style.width = "100%";
+        modelSel.className = "pr-settings-field pr-select";
         const vlmModelOptions = [
             "Qwen2.5-VL-3B — Fast",
             "Qwen2.5-VL-7B — Best quality",
@@ -4585,43 +4283,39 @@ class TimelineEditor {
             modelSel.appendChild(o);
         });
         modelSel.addEventListener("change", () => {
-            const c = this._getVlmConfig();
+            const c = _getVlmConfig();
             c.model_name = modelSel.value;
-            this._setVlmConfig(c);
+            _setVlmConfig(c);
         });
         menu.appendChild(this._makeSettingRow("Vision Model", modelSel));
 
         // Temperature
         const tempInput = document.createElement("input");
         tempInput.type = "number";
-        tempInput.className = "pr-settings-field";
+        tempInput.className = "pr-settings-field pr-number-input";
         tempInput.min = 0;
         tempInput.max = 2;
         tempInput.step = 0.05;
         tempInput.value = vlmCfg.temperature;
-        tempInput.style.width = "70px";
-        tempInput.style.textAlign = "center";
         tempInput.addEventListener("change", () => {
-            const c = this._getVlmConfig();
+            const c = _getVlmConfig();
             c.temperature = parseFloat(tempInput.value) ?? 0.3;
-            this._setVlmConfig(c);
+            _setVlmConfig(c);
         });
         menu.appendChild(this._makeSettingRow("Temperature", tempInput));
 
         // Max tokens
         const maxTokInput = document.createElement("input");
         maxTokInput.type = "number";
-        maxTokInput.className = "pr-settings-field";
+        maxTokInput.className = "pr-settings-field pr-number-input";
         maxTokInput.min = 32;
         maxTokInput.max = 512;
         maxTokInput.step = 1;
         maxTokInput.value = vlmCfg.max_tokens;
-        maxTokInput.style.width = "70px";
-        maxTokInput.style.textAlign = "center";
         maxTokInput.addEventListener("change", () => {
-            const c = this._getVlmConfig();
+            const c = _getVlmConfig();
             c.max_tokens = parseInt(maxTokInput.value) || 180;
-            this._setVlmConfig(c);
+            _setVlmConfig(c);
         });
         menu.appendChild(this._makeSettingRow("Max Tokens", maxTokInput));
 
@@ -4631,37 +4325,35 @@ class TimelineEditor {
         offlineCb.checked = vlmCfg.offline_mode;
         offlineCb.style.cursor = "pointer";
         offlineCb.addEventListener("change", () => {
-            const c = this._getVlmConfig();
+            const c = _getVlmConfig();
             c.offline_mode = offlineCb.checked;
-            this._setVlmConfig(c);
+            _setVlmConfig(c);
         });
         menu.appendChild(this._makeSettingRow("Offline Mode", offlineCb));
 
         // Local model path
         const localPathInput = document.createElement("input");
         localPathInput.type = "text";
-        localPathInput.className = "pr-settings-field";
-        localPathInput.style.width = "100%";
+        localPathInput.className = "pr-settings-field pr-text-input";
         localPathInput.value = vlmCfg.local_path;
         localPathInput.placeholder = "Dir with config.json (HF), dir with .gguf, or .gguf file path";
         localPathInput.addEventListener("change", () => {
-            const c = this._getVlmConfig();
+            const c = _getVlmConfig();
             c.local_path = localPathInput.value.trim();
-            this._setVlmConfig(c);
+            _setVlmConfig(c);
         });
         menu.appendChild(this._makeSettingRow("Local Path", localPathInput));
 
         // mmproj path (for GGUF vision models — auto-detected if left empty)
         const mmProjInput = document.createElement("input");
         mmProjInput.type = "text";
-        mmProjInput.className = "pr-settings-field";
-        mmProjInput.style.width = "100%";
+        mmProjInput.className = "pr-settings-field pr-select";
         mmProjInput.value = vlmCfg.mmproj_path;
         mmProjInput.placeholder = "mmproj .gguf — auto-detected from Local Path dir";
         mmProjInput.addEventListener("change", () => {
-            const c = this._getVlmConfig();
+            const c = _getVlmConfig();
             c.mmproj_path = mmProjInput.value.trim();
-            this._setVlmConfig(c);
+            _setVlmConfig(c);
         });
         menu.appendChild(this._makeSettingRow("mmproj Path", mmProjInput));
 
@@ -4677,8 +4369,7 @@ class TimelineEditor {
 
         const _makeVlmSelect = (options, currentVal, key) => {
             const sel = document.createElement("select");
-            sel.className = "pr-settings-field";
-            sel.style.width = "100%";
+            sel.className = "pr-settings-field pr-select";
             options.forEach(opt => {
                 const o = document.createElement("option");
                 o.value = opt;
@@ -4687,9 +4378,9 @@ class TimelineEditor {
                 sel.appendChild(o);
             });
             sel.addEventListener("change", () => {
-                const c = this._getVlmConfig();
+                const c = _getVlmConfig();
                 c[key] = sel.value;
-                this._setVlmConfig(c);
+                _setVlmConfig(c);
             });
             return sel;
         };
@@ -4697,8 +4388,7 @@ class TimelineEditor {
         // Style Preset — options loaded dynamically from Python STYLE_PRESETS dict
         const presetRow = this._makeSettingRow("Style Preset", (() => {
             const sel = document.createElement("select");
-            sel.className = "pr-settings-field";
-            sel.style.width = "100%";
+            sel.className = "pr-settings-field  pr-select";
             const _fillPresetSel = (names) => {
                 sel.innerHTML = "";
                 names.forEach(opt => {
@@ -4717,51 +4407,27 @@ class TimelineEditor {
                 })
                 .catch(() => _fillPresetSel(["None — let VLM decide"]));
             sel.addEventListener("change", () => {
-                const c = this._getVlmConfig();
+                const c = _getVlmConfig();
                 c.style_preset = sel.value;
-                this._setVlmConfig(c);
+                _setVlmConfig(c);
             });
             return sel;
         })());
         menu.appendChild(presetRow);
 
-        menu.appendChild(this._makeSettingRow("Shot Angle", _makeVlmSelect([
-            "None — let VLM decide",
-            "Wide shot",
-            "Medium shot",
-            "Close-up",
-            "Extreme close-up",
-            "Aerial / Bird's eye",
-            "Low angle",
-            "Over the shoulder",
-            "POV",
-        ], vlmCfg.shot_angle, "shot_angle")));
+        menu.appendChild(this._makeSettingRow("Shot Angle", _makeVlmSelect(SHOT_ANGLES, vlmCfg.shot_angle, "shot_angle")));
 
-        menu.appendChild(this._makeSettingRow("Camera Movement", _makeVlmSelect([
-            "None — let VLM decide",
-            "Static",
-            "Slow dolly in",
-            "Slow dolly out",
-            "Gentle pan left",
-            "Gentle pan right",
-            "Tilt up",
-            "Tilt down",
-            "Tracking shot",
-            "Handheld",
-            "Crane / Boom up",
-            "Circular orbit",
-        ], vlmCfg.camera_move, "camera_move")));
+        menu.appendChild(this._makeSettingRow("Camera Movement", _makeVlmSelect(CAMERA_MOVEMENTS, vlmCfg.camera_move, "camera_move")));
 
         const styleExtraInput = document.createElement("input");
         styleExtraInput.type = "text";
-        styleExtraInput.className = "pr-settings-field";
-        styleExtraInput.style.width = "100%";
+        styleExtraInput.className = "pr-settings-field pr-text-input";
         styleExtraInput.value = vlmCfg.style_extra;
         styleExtraInput.placeholder = "e.g. warm golden light, shallow DOF";
         styleExtraInput.addEventListener("change", () => {
-            const c = this._getVlmConfig();
+            const c = _getVlmConfig();
             c.style_extra = styleExtraInput.value.trim();
-            this._setVlmConfig(c);
+            _setVlmConfig(c);
         });
         menu.appendChild(this._makeSettingRow("Extra Instruction", styleExtraInput));
 
@@ -4817,66 +4483,62 @@ class TimelineEditor {
         }
     }
 
-    _getVlmConfig() {
-        let raw = {};
-        try {
-            raw = JSON.parse(localStorage.getItem("wdc_vlm_config") || "{}");
-        } catch {
-        }
-        return {
-            enabled: raw.enabled ?? true,
-            model_name: raw.model_name ?? "Qwen2.5-VL-3B — Fast",
-            temperature: raw.temperature ?? 0.3,
-            max_tokens: raw.max_tokens ?? 180,
-            offline_mode: raw.offline_mode ?? false,
-            local_path: raw.local_path ?? "",
-            mmproj_path: raw.mmproj_path ?? "",
-            style_preset: raw.style_preset ?? "None — let VLM decide",
-            shot_angle: raw.shot_angle ?? "None — let VLM decide",
-            camera_move: raw.camera_move ?? "None — let VLM decide",
-            style_extra: raw.style_extra ?? "",
-        };
-    }
-
-    _setVlmConfig(cfg) {
-        localStorage.setItem("wdc_vlm_config", JSON.stringify(cfg));
-    }
 
     async generatePrompts(btn, targetIndex = -1) {
-        const cfg = this._getVlmConfig();
+        const cfg = _getVlmConfig();
 
         if (!cfg.enabled) {
             alert("Prompt Writer is disabled.\nEnable it in Settings (⚙️) → Prompt Writer section.");
             return;
         }
 
-        const imageSections = this.timeline.segments.filter(
-            s => s.type !== "text" && (s.imageB64 || s.imageFile)
-        );
+        const validSections = this.timeline.segments.filter(s => {
+            if (s.type === "text" || s.type === "video") return true;
+            return s.type === "image" || s.imageB64 || s.imageFile;
+        });
 
-        if (imageSections.length === 0) {
-            alert("No image segments found on the timeline.\nAdd images first, then click Generate Prompts.");
+        if (validSections.length === 0) {
+            alert("No valid segments found on the timeline.\nAdd media or text first, then click Generate Prompts.");
             return;
         }
 
-        const targetCount = targetIndex === -1 ? imageSections.length : 1;
+        const targetCount = targetIndex === -1 ? validSections.length : 1;
         const origHTML = btn.innerHTML;
 
-        const setGeneratingState = (isGenerating, isError = false) => {
+        // 1. Create the AbortController for this request
+        this._promptAbortController = new AbortController();
+        const signal = this._promptAbortController.signal;
+
+        const setGeneratingState = (isGenerating, isError = false, isAborted = false) => {
             btn.disabled = isGenerating;
             if (isGenerating) {
                 if (this.loadingOverlay) {
+                    // 2. Add an Abort button to the overlay UI
                     this.loadingOverlay.innerHTML = `
-                            <div class="pr-spinner"></div>
-                            <div>✨ Analyzing ${targetCount} clip${targetCount > 1 ? 's' : ''} with Vision Model...</div>
-                        `;
+                               <div class="pr-spinner"></div>
+                               <div style="margin-bottom: 12px;">✨ Analyzing ${targetCount} clip${targetCount > 1 ? 's' : ''} with Vision Model...</div>
+                               <button id="pr-abort-btn" class="pr-btn pr-btn-danger">Cancel</button>
+                           `;
                     this.loadingOverlay.style.display = "flex";
+
+                    // 3. Attach a click event to trigger the abort
+                    const abortBtn = this.loadingOverlay.querySelector("#pr-abort-btn");
+                    if (abortBtn) {
+                        abortBtn.addEventListener("click", () => {
+                            if (this._promptAbortController) {
+                                this._promptAbortController.abort();
+                            }
+                        });
+                    }
                 }
                 this.promptInput.disabled = true;
             } else {
                 if (this.loadingOverlay) this.loadingOverlay.style.display = "none";
                 this.promptInput.disabled = false;
-                if (isError) btn.innerHTML = "✗ Error";
+
+                // Update button text based on exit state
+                if (isAborted) btn.innerHTML = "⏹ Aborted";
+                else if (isError) btn.innerHTML = "✗ Error";
             }
         };
 
@@ -4914,6 +4576,7 @@ class TimelineEditor {
                 method: "POST",
                 headers: {"Content-Type": "application/json"},
                 body: JSON.stringify(payload),
+                signal: signal // 4. Pass the abort signal to the fetch request
             });
 
             const data = await resp.json();
@@ -4946,6 +4609,19 @@ class TimelineEditor {
             }, 2500);
 
         } catch (e) {
+            // 5. Catch the AbortError specifically to prevent throwing a nasty alert
+            if (e.name === 'AbortError') {
+                console.log(PluginName, "Prompt generation aborted by user.");
+                setGeneratingState(false, false, true); // sets isAborted = true
+
+                setTimeout(() => {
+                    btn.innerHTML = origHTML;
+                    btn.disabled = false;
+                }, 2000);
+
+                return;
+            }
+
             setGeneratingState(false, true);
 
             setTimeout(() => {
@@ -4954,6 +4630,9 @@ class TimelineEditor {
             }, 3000);
 
             alert(`Prompt generation failed:\n\n${e.message}`);
+        } finally {
+            // 6. Clean up the controller
+            this._promptAbortController = null;
         }
     }
 
