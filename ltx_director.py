@@ -7,13 +7,14 @@ import os
 from enum import StrEnum
 
 import av
-import comfy.model_management
-import folder_paths
 import numpy as np
 import torch
 import torch.nn.functional as F
-from comfy_api.latest import io
 from PIL import Image
+
+import comfy.model_management
+import folder_paths
+from comfy_api.latest import io
 
 from .patches import apply_patches, detect_model_type
 from .prompt_relay import (
@@ -22,7 +23,7 @@ from .prompt_relay import (
     distribute_segment_lengths,
     get_raw_tokenizer,
     map_token_indices,
-    )
+)
 
 log = logging.getLogger(__name__)
 
@@ -719,7 +720,22 @@ class LTXDirector(io.ComfyNode):
                     tooltip="Outputs True if in Preserve mode, useful for triggering an Audio Switch node.",
                 ),
             ],
-        )e-3,
+        )
+
+    @classmethod
+    def execute(
+        cls,
+        model,
+        clip,
+        global_prompt,
+        duration_frames,
+        duration_seconds,
+        timeline_data,
+        local_prompts,
+        segment_lengths,
+        audio_vae,
+        guide_strength="",
+        epsilon=1e-3,
         frame_rate=24,
         display_mode="seconds",
         custom_width=768,
@@ -999,6 +1015,7 @@ class LTXDirector(io.ComfyNode):
                         "waveform": waveform,
                         "sample_rate": audio_out["sample_rate"],
                     },
+                )
                 )
 
             if latent_samples.numel() == 0:
