@@ -4,6 +4,7 @@ import json
 import logging
 import math
 import os
+from enum import StrEnum
 
 import av
 import comfy.model_management
@@ -27,6 +28,12 @@ log = logging.getLogger(__name__)
 
 # Custom socket type shared with LTXSequencer
 GuideData = io.Custom("GUIDE_DATA")
+
+
+class AudioMode(StrEnum):
+    GENERATE = "Generate From Scratch"
+    TEMPLATE = "Template (Audio2Audio)"
+    PRESERVE = "Preserve (Inpaint Gaps)"
 
 
 def _load_image_tensor(seg: dict) -> torch.Tensor:
@@ -256,8 +263,10 @@ def _compress_image(tensor: torch.Tensor, crf: int) -> torch.Tensor:
 
 
 def _build_combined_audio(
-        timeline_data_str: str, duration_frames: int, frame_rate: float,
-        ) -> dict:
+    timeline_data_str: str,
+    duration_frames: int,
+    frame_rate: float = 24,
+) -> dict:
     """Parses timeline JSON, loads/trims audio directly from memory using PyAV,
     and aligns to a global timeline yielding ComfyUI's format.
     Output length explicitly mimics the timeline's duration_frames length."""
@@ -526,240 +535,210 @@ class LTXDirector(io.ComfyNode):
     @classmethod
     def define_schema(cls):
         return io.Schema(
-                node_id="LTXDirector",
-                display_name="LTX Director",
-                category="WhatDreamsCost",
-                description=(
-                        "Same as Prompt Relay Encode, but local prompts and segment lengths are edited "
-                        "visually as draggable blocks on a timeline. The duration_frames input only sets the "
-                        "timeline scale (pixel space) — actual frame count is still read from the latent."
+            node_id="LTXDirector",
+            display_name="LTX Director",
+            category="WhatDreamsCost",
+            description=(
+                "Same as Prompt Relay Encode, but local prompts and segment lengths are edited "
+                "visually as draggable blocks on a timeline. The duration_frames input only sets the "
+                "timeline scale (pixel space) — actual frame count is still read from the latent."
+            ),
+            inputs=[
+                io.Model.Input("model"),
+                io.Clip.Input("clip"),
+                io.Vae.Input(
+                    "audio_vae",
+                    optional=False,
+                    tooltip="Connect an Audio VAE to generate audio latents.",
                 ),
-                inputs=[
-                        io.Model.Input("model"),
-                        io.Clip.Input("clip"),
-                        io.Vae.Input(
-                                "audio_vae",
-                                optional=True,
-                                tooltip="Optional. Connect an Audio VAE to generate audio latents.",
-                                ),
-                        io.Latent.Input(
-                                "optional_latent",
-                                optional=True,
-                                tooltip="Optional. Connect a latent to override the auto-generated one.",
-                                ),
-                        io.String.Input(
-                                "global_prompt",
-                                multiline=True,
-                                default="",
-                                tooltip="Conditions the entire video. Anchors persistent characters, objects, and scene context.",
-                                ),
-
-                        # --- 1. Timing & Playback ---
-                        io.Float.Input(
-                                "frame_rate",
-                                default=24,
-                                min=1,
-                                max=60,
-                                step=1,
-                                optional=True,
-                                tooltip="Frames per second — affects timeline display and rendering math.",
-                                ),
-                        io.Int.Input(
-                                "duration_frames",
-                                default=120,
-                                min=1,
-                                max=10000,
-                                step=1,
-                                tooltip="Total timeline length in pixel-space frames.",
-                                ),
-                        io.Float.Input(
-                                "duration_seconds",
-                                default=5.00,
-                                min=0.10,
-                                max=1000.0,
-                                step=0.50,
-                                tooltip="Total timeline duration in seconds (computed/synced from frames).",
-                                ),
-
-                        # --- 2. Render Crop ---
-                        io.Float.Input(
-                                "render_start_seconds",
-                                default=0.0,
-                                min=0.0,
-                                max=1000.0,
-                                step=0.50,
-                                optional=True,
-                                tooltip="Crop the generation window to start from this second instead of 0.0s.",
-                                ),
-                        io.Float.Input(
-                                "render_duration_seconds",
-                                default=5.0,
-                                min=1.00,
-                                max=20.0,
-                                step=0.50,
-                                optional=True,
-                                tooltip="How many seconds to generate. Set to 0.0 to generate all the way to the end of the timeline.",
-                                ),
-
-                        # --- 3. Output Resolution ---
-                        io.Int.Input(
-                                "custom_width",
-                                default=0,
-                                min=0,
-                                max=8192,
-                                step=1,
-                                optional=True,
-                                tooltip="Target output width for all image segments. Set to 0 to use original.",
-                                ),
-                        io.Int.Input(
-                                "custom_height",
-                                default=0,
-                                min=0,
-                                max=8192,
-                                step=1,
-                                optional=True,
-                                tooltip="Target output height for all image segments. Set to 0 to use original.",
-                                ),
-                        io.Combo.Input(
-                                "resize_method",
-                                options=[
-                                        "maintain aspect ratio",
-                                        "stretch to fit",
-                                        "pad",
-                                        "crop",
-                                        ],
-                                default="maintain aspect ratio",
-                                optional=True,
-                                tooltip="How to resize image segments to fit the target dimensions.",
-                                ),
-
-                        # --- 4. Audio Control ---
-                        io.Combo.Input(
-                                "audio_mode",
-                                options=[
-                                        "Generate From Scratch", "Template (Audio2Audio)",
-                                        "Preserve (Inpaint Gaps)",
-                                        ],
-                                default="Generate From Scratch",
-                                tooltip="How the AI handles timeline audio. Template allows dubbing via Sampler denoise. Preserve locks the audio exactly.",
-                                ),
-
-                        # --- 5. Hidden / Internal Settings ---
-                        io.String.Input(
-                                "timeline_data",
-                                default="",
-                                tooltip="JSON state of the timeline editor.",
-                                ),
-                        io.String.Input(
-                                "local_prompts",
-                                multiline=True,
-                                default="",
-                                ),
-                        io.String.Input(
-                                "segment_lengths",
-                                default="",
-                                ),
-                        io.String.Input(
-                                "guide_strength",
-                                default="",
-                                ),
-                        io.Float.Input(
-                                "epsilon",
-                                default=0.001,
-                                min=0.0001,
-                                max=0.99,
-                                step=0.0001,
-                                ),
-                        io.Combo.Input(
-                                "display_mode",
-                                options=["frames", "seconds"],
-                                default="seconds",
-                                optional=True,
-                                ),
-                        io.Int.Input(
-                                "divisible_by",
-                                default=32,
-                                min=1,
-                                max=256,
-                                step=1,
-                                optional=True,
-                                ),
-                        io.Int.Input(
-                                "img_compression",
-                                default=18,
-                                min=0,
-                                max=100,
-                                step=1,
-                                optional=True,
-                                ),
-                        ],
-                outputs=[
-                        io.Model.Output(display_name="model"),
-                        io.Conditioning.Output(display_name="positive"),
-                        io.Latent.Output(
-                                display_name="video_latent",
-                                tooltip="Auto-generated LTXV empty latent (only populated when no latent is connected).",
-                                ),
-                        io.Latent.Output(
-                                display_name="audio_latent",
-                                tooltip="Auto-generated audio latent (uses custom audio if enabled).",
-                                ),
-                        GuideData.Output(display_name="guide_data"),
-                        io.Float.Output(
-                                display_name="frame_rate",
-                                tooltip="The frame rate used for the timeline.",
-                                ),
-                        io.Audio.Output(
-                                display_name="combined_audio",
-                                tooltip="Combined timeline audio layout.",
-                                ),
-                        ],
-                )
-
-    @classmethod
-    def execute(
-            cls,
-            model,
-            clip,
-            global_prompt,
-            duration_frames,
-            duration_seconds,
-            timeline_data,
-            local_prompts,
-            segment_lengths,
-            guide_strength="",
-            epsilon=1e-3,
-            frame_rate=24,
-            display_mode="seconds",
-            custom_width=768,
-            custom_height=512,
-            resize_method="maintain aspect ratio",
-            divisible_by=32,
-            img_compression=0,
-            audio_vae=None,
-            optional_latent=None,
-            audio_mode="Generate From Scratch",
-            # use_custom_audio=False,
-            render_start_seconds=0.0,
-            render_duration_seconds=0.0,
-            ) -> io.NodeOutput:
+                io.Latent.Input(
+                    "optional_latent",
+                    optional=True,
+                    tooltip="Optional. Connect a latent to override the auto-generated one.",
+                ),
+                io.String.Input(
+                    "global_prompt",
+                    multiline=True,
+                    default="",
+                    tooltip="Conditions the entire video. Anchors persistent characters, objects, and scene context.",
+                ),
+                # --- 1. Timing & Playback ---
+                io.Float.Input(
+                    "frame_rate",
+                    default=24,
+                    min=1,
+                    max=60,
+                    step=1,
+                    optional=True,
+                    tooltip="Frames per second — affects timeline display and rendering math.",
+                ),
+                io.Int.Input(
+                    "duration_frames",
+                    default=120,
+                    min=1,
+                    max=10000,
+                    step=1,
+                    tooltip="Total timeline length in pixel-space frames.",
+                ),
+                io.Float.Input(
+                    "duration_seconds",
+                    default=5.00,
+                    min=0.10,
+                    max=1000.0,
+                    step=0.50,
+                    tooltip="Total timeline duration in seconds (computed/synced from frames).",
+                ),
+                # --- 2. Render Crop ---
+                io.Float.Input(
+                    "render_start_seconds",
+                    default=0.0,
+                    min=0.0,
+                    max=1000.0,
+                    step=0.50,
+                    optional=True,
+                    tooltip="Crop the generation window to start from this second instead of 0.0s.",
+                ),
+                io.Float.Input(
+                    "render_duration_seconds",
+                    default=5.0,
+                    min=1.00,
+                    max=20.0,
+                    step=0.50,
+                    optional=True,
+                    tooltip="How many seconds to generate. Set to 0.0 to generate all the way to the end of the timeline.",
+                ),
+                # --- 3. Output Resolution ---
+                io.Int.Input(
+                    "custom_width",
+                    default=0,
+                    min=0,
+                    max=8192,
+                    step=1,
+                    optional=True,
+                    tooltip="Target output width for all image segments. Set to 0 to use original.",
+                ),
+                io.Int.Input(
+                    "custom_height",
+                    default=0,
+                    min=0,
+                    max=8192,
+                    step=1,
+                    optional=True,
+                    tooltip="Target output height for all image segments. Set to 0 to use original.",
+                ),
+                io.Combo.Input(
+                    "resize_method",
+                    options=[
+                        "maintain aspect ratio",
+                        "stretch to fit",
+                        "pad",
+                        "crop",
+                    ],
+                    default="maintain aspect ratio",
+                    optional=True,
+                    tooltip="How to resize image segments to fit the target dimensions.",
+                ),
+                # --- 4. Audio Control ---
+                io.Combo.Input(
+                    "audio_mode",
+                    options=AudioMode,
+                    default=AudioMode.GENERATE,
+                    tooltip="Generate: New audio from scratch. Template: AI creates new audio based on timeline. Preserve: Audio is used only for video conditioning (lip sync, etc).",
+                ),
+                # --- 5. Hidden / Internal Settings ---
+                io.String.Input(
+                    "timeline_data",
+                    default="",
+                    tooltip="JSON state of the timeline editor.",
+                ),
+                io.String.Input(
+                    "local_prompts",
+                    multiline=True,
+                    default="",
+                ),
+                io.String.Input(
+                    "segment_lengths",
+                    default="",
+                ),
+                io.String.Input(
+                    "guide_strength",
+                    default="",
+                ),
+                io.Float.Input(
+                    "epsilon",
+                    default=0.001,
+                    min=0.0001,
+                    max=0.99,
+                    step=0.0001,
+                ),
+                io.Combo.Input(
+                    "display_mode",
+                    options=["frames", "seconds"],
+                    default="seconds",
+                    optional=True,
+                ),
+                io.Int.Input(
+                    "divisible_by",
+                    default=32,
+                    min=1,
+                    max=256,
+                    step=1,
+                    optional=True,
+                ),
+                io.Int.Input(
+                    "img_compression",
+                    default=18,
+                    min=0,
+                    max=100,
+                    step=1,
+                    optional=True,
+                ),
+            ],
+            outputs=[
+                io.Model.Output(display_name="model"),
+                io.Conditioning.Output(display_name="positive"),
+                io.Latent.Output(
+                    display_name="video_latent",
+                    tooltip="Auto-generated LTXV empty latent (only populated when no latent is connected).",
+                ),
+                io.Latent.Output(
+                    display_name="audio_latent",
+                    tooltip="Auto-generated audio latent (uses custom audio if enabled).",
+                ),
+                GuideData.Output(display_name="guide_data"),
+                io.Float.Output(
+                    display_name="frame_rate",
+                    tooltip="The frame rate used for the timeline.",
+                ),
+                io.Audio.Output(
+                    display_name="timeline_audio",
+                    tooltip="Original Audio from Timeline.",
+                ),
+                io.Boolean.Output(
+                    display_name="is_use_raw_audio",
+                    tooltip="Outputs True if in Preserve mode, useful for triggering an Audio Switch node.",
+                ),
+            ],
+        )e-3,
+        frame_rate=24,
+        display_mode="seconds",
+        custom_width=768,
+        custom_height=512,
+        resize_method="maintain aspect ratio",
+        divisible_by=32,
+        img_compression=18,
+        optional_latent=None,
+        audio_mode=AudioMode.GENERATE,
+        render_start_seconds=0.0,
+        render_duration_seconds=5.0,
+    ) -> io.NodeOutput:
 
         # --- Calculate crop window in frame spaces (Start + Duration instead of End) ---
-        start_crop_frame = int(round(render_start_seconds * frame_rate))
+        render_duration_seconds = render_duration_seconds or duration_seconds
 
-        if render_duration_seconds > 0.0:
-            end_crop_frame = start_crop_frame + int(
-                    round(render_duration_seconds * frame_rate),
-                    )
-        else:
-            end_crop_frame = duration_frames
+        start_crop_frame = round(max(0, render_start_seconds * frame_rate))
 
-        if start_crop_frame < 0:
-            start_crop_frame = 0
-        if end_crop_frame > duration_frames:
-            end_crop_frame = duration_frames
-        if end_crop_frame <= start_crop_frame:
-            end_crop_frame = start_crop_frame + 1
+        end_crop_frame = round(start_crop_frame + render_duration_seconds * frame_rate)
 
         # Override the targeted latent generation duration
         duration_frames = end_crop_frame - start_crop_frame
@@ -797,9 +776,11 @@ class LTXDirector(io.ComfyNode):
                 local_prompts = raw_prompts[0] if raw_prompts else ""
 
         # --- Programmatically slice timeline JSON data for audio tracks ---
-        try:
-            if timeline_data:
-                tdata = json.loads(timeline_data)
+
+        tdata = json.loads(timeline_data) if timeline_data else {}
+
+        if timeline_data:
+            try:
                 if "audioSegments" in tdata:
                     adjusted_audio = []
                     for aud in tdata["audioSegments"]:
@@ -820,10 +801,11 @@ class LTXDirector(io.ComfyNode):
                             adjusted_audio.append(aud)
                     tdata["audioSegments"] = adjusted_audio
                 timeline_data = json.dumps(tdata)
-        except Exception as e:
-            log.warning(
-                    "[PromptRelay] Could not adjust audio timeline data: %s", e,
-                    )
+            except Exception as e:
+                log.warning(
+                    "[PromptRelay] Could not adjust audio timeline data: %s",
+                    e,
+                )
 
         # --- Build guide_data from image segments FIRST (to derive output dimensions) ---
         guide_data = {
@@ -832,9 +814,10 @@ class LTXDirector(io.ComfyNode):
                 "strengths": [],
                 "frame_rate": frame_rate,
                 }
+
         derived_w, derived_h = custom_width, custom_height
+
         try:
-            tdata = json.loads(timeline_data) if timeline_data else {}
             img_segs = [
                     s
                     for s in tdata.get("segments", [])
@@ -984,7 +967,7 @@ class LTXDirector(io.ComfyNode):
                 )
 
         # Determine if we should process timeline audio at all
-        process_audio = audio_mode in ["Template (Audio2Audio)", "Preserve (Inpaint Gaps)"]
+        process_audio = audio_mode != AudioMode.GENERATE
 
         # --- Build Audio Output ---
         # If we are generating from scratch, pass an empty string so combined_audio is pure silence
@@ -997,116 +980,76 @@ class LTXDirector(io.ComfyNode):
         # --- Audio Latent Generation ---
         audio_latent = {}
 
-        if audio_vae is not None:
-            # Helper to generate empty latent
-            def get_empty_latent():
-                inner = getattr(audio_vae, "first_stage_model", audio_vae)
-                z_channels = getattr(audio_vae, "latent_channels",
-                                     getattr(inner, "latent_channels", 32),
-                                     )
-                audio_freq = inner.latent_frequency_bins
-                num_audio_latents = inner.num_of_latents_from_frames(
-                        ltxv_length, float(frame_rate),
-                        )
-                audio_latents = torch.zeros(
-                        (1, z_channels, num_audio_latents, audio_freq),
-                        device=comfy.model_management.intermediate_device(),
-                        )
-                return {"samples": audio_latents, "type": "audio"}
+        if process_audio:
+            if audio_out is None:
+                raise ValueError("No audio waveform to encode.")
+            waveform = audio_out["waveform"]
+            if waveform.ndim == 2:
+                waveform = waveform.unsqueeze(0)
+            if waveform.ndim != 3:
+                raise ValueError(
+                    f"Expected custom audio waveform with 2 or 3 dims, got shape {tuple(waveform.shape)}",
+                )
 
-            if process_audio:
-                try:
-                    if audio_out is not None:
-                        waveform = audio_out["waveform"]
-                        if waveform.ndim == 2:
-                            waveform = waveform.unsqueeze(0)
-                        if waveform.ndim != 3:
-                            raise ValueError(
-                                    f"Expected custom audio waveform with 2 or 3 dims, got shape {tuple(waveform.shape)}",
-                                    )
-
-                        if hasattr(audio_vae, "first_stage_model"):
-                            latent_samples = audio_vae.encode(
-                                    waveform.movedim(1, -1),
-                                    )
-                        else:
-                            latent_samples = audio_vae.encode(
-                                    {
-                                            "waveform": waveform,
-                                            "sample_rate": audio_out["sample_rate"],
-                                            },
-                                    )
-
-                        if latent_samples.numel() == 0:
-                            raise ValueError(
-                                    "Encoded audio latent is empty (0 elements).",
-                                    )
-
-                        # Mask starts as 1.0 (Generate everywhere / Template mode)
-                        mask = torch.ones_like(latent_samples)
-
-                        # Only punch holes (0.0) to lock audio if we are in Preserve mode
-                        if audio_mode == "Preserve (Inpaint Gaps)":
-                            tdata = (
-                                    json.loads(timeline_data) if timeline_data else {}
-                            )
-                            for seg in tdata.get("audioSegments", []):
-                                start_sec = float(seg.get("start", 0)) / float(
-                                        frame_rate,
-                                        )
-                                len_sec = float(seg.get("length", 1)) / float(
-                                        frame_rate,
-                                        )
-                                total_sec = ltxv_length / float(frame_rate)
-
-                                start_idx = int(
-                                        (start_sec / total_sec)
-                                        * latent_samples.shape[2],
-                                        )
-                                end_idx = int(
-                                        ((start_sec + len_sec) / total_sec)
-                                        * latent_samples.shape[2],
-                                        )
-                                mask[:, :, start_idx:end_idx, :] = 0.0
-
-                        audio_latent = {
-                                "samples": latent_samples,
-                                "type": "audio",
-                                "noise_mask": mask,
-                                }
-                        log.info(
-                                f"[PromptRelay] Generated custom audio latent in '{audio_mode}' mode.",
-                                )
-                    else:
-                        raise ValueError("No audio waveform to encode.")
-                except Exception as e:
-                    log.error(
-                            "[PromptRelay] Failed to generate custom audio latent: %s",
-                            e,
-                            )
-                    raise e
+            if hasattr(audio_vae, "first_stage_model"):
+                latent_samples = audio_vae.encode(waveform.movedim(1, -1))
             else:
-                try:
-                    audio_latent = get_empty_latent()
-                    log.info(
-                            "[PromptRelay] Auto-generated empty audio latent (Generate From Scratch).",
-                            )
-                except Exception as e:
-                    log.error(
-                            "[PromptRelay] Could not generate empty audio latent: %s",
-                            e,
-                            )
-                    raise e
+                latent_samples = audio_vae.encode(
+                    {
+                        "waveform": waveform,
+                        "sample_rate": audio_out["sample_rate"],
+                    },
+                )
+
+            if latent_samples.numel() == 0:
+                raise ValueError("Encoded audio latent is empty (0 elements).")
+
+            # EXACT SAME LATENT FOR BOTH TEMPLATE AND PRESERVE.
+            # No masks. Just the raw encoded audio to act as the guide.
+            audio_latent = {
+                "samples": latent_samples,
+                "type": "audio",
+            }
+
+            log.info(
+                f"[PromptRelay] Generated custom audio latent in '{audio_mode}' mode."
+            )
+
+        else:
+            # generate empty audio latent
+            inner = getattr(audio_vae, "first_stage_model", audio_vae)
+            z_channels = getattr(
+                audio_vae,
+                "latent_channels",
+                getattr(inner, "latent_channels", 32),
+            )
+            audio_freq = inner.latent_frequency_bins
+            num_audio_latents = inner.num_of_latents_from_frames(
+                ltxv_length,
+                float(frame_rate),
+            )
+            audio_latents = torch.zeros(
+                (1, z_channels, num_audio_latents, audio_freq),
+                device=comfy.model_management.intermediate_device(),
+            )
+            audio_latent = {"samples": audio_latents, "type": "audio"}
+
+            log.info(
+                "[PromptRelay] Auto-generated empty audio latent (Generate From Scratch)."
+            )
+
+        use_raw_audio = bool(audio_mode == AudioMode.PRESERVE)
 
         return io.NodeOutput(
-                patched,
-                conditioning,
-                latent,
-                audio_latent,
-                guide_data,
-                float(frame_rate),
-                audio_out,
-                )
+            patched,
+            conditioning,
+            latent,
+            audio_latent,
+            guide_data,
+            float(frame_rate),
+            audio_out,
+            use_raw_audio,
+        )
 
 
 NODE_CLASS_MAPPINGS = {
