@@ -2,6 +2,7 @@ import asyncio
 import base64
 import gc
 import io as _io
+import json
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
@@ -12,243 +13,57 @@ from PIL import Image
 
 import folder_paths
 
+from .ltx_prompt_writer_constants import (
+    _NONE_STYLE_LABEL,
+    STYLE_PRESETS,
+    TEXT_ONLY_SYSTEM_PROMPT,
+    VISION_MODELS,
+    VISION_SYSTEM_PROMPT,
+)
+
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Model registry
+# External Configuration Setup
 # ---------------------------------------------------------------------------
 
-VISION_MODELS = {
-    "Qwen2.5-VL-3B — Fast": "huihui-ai/Qwen2.5-VL-3B-Instruct-abliterated",
-    "Qwen2.5-VL-7B — Best quality": "prithivMLmods/Qwen2.5-VL-7B-Abliterated-Caption-it",
-}
+# Use ComfyUI's official user directory to prevent overwrites during git updates.
+# Fallback to the node's directory if running an older version of ComfyUI.
+try:
+    _USER_DIR = folder_paths.get_user_directory()
+except AttributeError:
+    _USER_DIR = os.path.dirname(__file__)
 
-VISION_SYSTEM_PROMPT = (
-    "You are an expert cinematographer and prompt writer for LTX-Video 2.3, "
-    "a state-of-the-art AI video generation model.\n\n"
-    "Analyze the image and write a single scene description of 100-130 words "
-    "optimised for video generation.\n\n"
-    "Include:\n"
-    "- Subjects: physical appearance, clothing, pose, expression\n"
-    "- Environment: location, lighting, time of day, atmosphere, textures, dominant colours\n"
-    "- Camera: angle, distance, suggested movement (e.g. slow dolly, static wide, gentle pan)\n"
-    "- Motion: what is happening or about to happen in the scene\n\n"
-    "Rules:\n"
-    "- Write in present tense\n"
-    "- Be specific, cinematic, and visually dense\n"
-    "- Avoid negative phrasing — describe what IS present\n"
-    "- Output ONLY the scene description. No preamble, no labels, no metadata."
-)
+# Named specifically to avoid clashing with other nodes in the user folder
+CONFIG_PATH = os.path.join(_USER_DIR, "ltx_prompt_writer_config.json")
 
-# ---------------------------------------------------------------------------
-# Style presets
-# ---------------------------------------------------------------------------
-# Each entry: "Preset name": "Full style instruction injected into the prompt."
-# Add new presets here — the JS dropdown is populated automatically via the
-# /whatdreamscost/style_presets endpoint; no JS edits needed.
-#
-# Style preset texts adapted from landon2022/LTX2EasyPrompt-LD
-# https://github.com/landon2022/LTX2EasyPrompt-LD
-# ---------------------------------------------------------------------------
 
-_NONE_STYLE_LABEL = "None — let VLM decide"
+def get_config() -> dict:
+    """Load configuration from JSON, generating default file if it doesn't exist."""
+    if not os.path.exists(CONFIG_PATH):
+        default_config = {
+            "VISION_MODELS": VISION_MODELS,
+            "VISION_SYSTEM_PROMPT": VISION_SYSTEM_PROMPT,
+            "STYLE_PRESETS": STYLE_PRESETS,
+        }
+        try:
+            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+                json.dump(default_config, f, indent=4, ensure_ascii=False)
+        except Exception as e:
+            log.warning("[PromptWriter] Could not write default config: %s", e)
+        return default_config
 
-STYLE_PRESETS: dict[str, str] = {
-    _NONE_STYLE_LABEL: "",
-    "Cinematic — Drama": (
-        "STYLE: Cinematic drama. Intimate, character-driven. Shallow depth of field — subject sharp, "
-        "world behind them soft. Colour grade: cool shadows, warm skin tones, restrained palette. "
-        "Camera: medium close-ups and close-ups dominate. Moves are slow and purposeful — "
-        "a slow push-in on a face, a rack focus between two people, a static hold that lets the actor breathe. "
-        "Lighting: motivated practical sources — a lamp, a window, a candle. Never flat."
-    ),
-    "Cinematic — Epic": (
-        "STYLE: Epic cinematic. Scale and environment are the protagonist. "
-        "Wide establishing shots and vast compositions that make people feel small against the world. "
-        "Camera: sweeping crane moves, slow lateral tracking shots, long pulls across terrain. "
-        "Colour grade: rich, contrasty — deep shadows, luminous highlights. "
-        "Every frame should feel like a poster. Build depth with foreground elements. "
-        "Natural motion blur on all movement."
-    ),
-    "Cinematic — Intimate close-up": (
-        "STYLE: Intimate close-up cinema. The entire world is a face, a hand, a detail. "
-        "Razor-thin depth of field — one eye sharp, the other already soft. Bokeh is smooth and organic. "
-        "Framing: extreme close-ups only — fill the frame with a face or a single feature. "
-        "Camera: barely moves — micro drifts and imperceptible breathing movement. "
-        "Colour grade: skin-tone faithful, warm and close. Lighting: one soft source, one fill, nothing else."
-    ),
-    "Slow-burn thriller": (
-        "STYLE: Slow-burn psychological thriller. Tight framing, long held shots, shallow depth of field. "
-        "Colour palette: desaturated teal and amber. Camera moves deliberately and slowly. "
-        "Tension built through restraint, not action."
-    ),
-    "Handheld documentary": (
-        "STYLE: Handheld documentary. Camera moves with the subject, never static. Slight shake on movement. "
-        "Natural available light only — no studio lighting. Colour grade: flat, slightly washed. "
-        "Intimate and observational — camera follows, never leads."
-    ),
-    "Horror — desaturated, harsh contrast": (
-        "STYLE: Horror. Heavily desaturated colour, crushed blacks. Harsh top-down or under-lighting. "
-        "Camera movements are slow and uneasy — never reassuring. "
-        "Framing leaves negative space — empty doorways, dark corners. No warmth in the image."
-    ),
-    "Golden hour drama": (
-        "STYLE: Golden hour drama. Warm amber and orange light from a low sun. Heavy lens flare. "
-        "Soft shadows, glowing skin tones. Wide establishing shots and medium shots. "
-        "Emotional, sweeping camera movement. Colour grade: warm, slightly overexposed highlights."
-    ),
-    "Noir — deep shadows, venetian light": (
-        "STYLE: Classic noir. Low-key lighting, venetian blind shadow patterns across faces and walls. "
-        "Black and white or heavily desaturated with single colour accent. "
-        "Camera angles: low, Dutch tilt, shot through objects. Mood is foreboding and fatalistic."
-    ),
-    "High fashion editorial": (
-        "STYLE: High fashion editorial. Striking, composed frames. Hard directional lighting with deep shadows. "
-        "Colour palette: high contrast, often monochrome or single accent colour. "
-        "Movement is deliberate and posed — model-aware. Camera movements are slow and precise. "
-        "Apply the editorial aesthetic to whatever location the user specified."
-    ),
-    "Music video — stylised": (
-        "STYLE: Music video. Rhythm-cut visual language — movement is driven by the beat. "
-        "High contrast colour grade with stylised palette. "
-        "Mix of tight close-ups and dramatic wide shots. Camera movement is expressive, not documentary. "
-        "Film the scene the user described, through a music video camera."
-    ),
-    "Action blockbuster": (
-        "STYLE: Action blockbuster. Fast kinetic energy. Dutch angles, crash zooms, whip pans. "
-        "Colour grade: teal and orange, high contrast. "
-        "Camera is never still — it moves with every impact. Slow motion inserts on key moments."
-    ),
-    "Sports documentary": (
-        "STYLE: Sports documentary. Tracking shots following the athlete. Telephoto compression. "
-        "Slow motion bursts at peak moments. Natural sound — crowd noise, impact, breathing. "
-        "Colour grade: clean and neutral. Camera is athletic — it moves like it is competing too."
-    ),
-    "Dreamy — soft focus, slow motion": (
-        "STYLE: Dreamy aesthetic. Soft focus edges with sharp centre. Pastel colour bleed. "
-        "Movement is slow — the frame breathes rather than cuts. "
-        "Shallow depth of field with heavy bokeh. Light sources bloom and halo."
-    ),
-    "Lo-fi home video — VHS": (
-        "STYLE: Lo-fi home video. VHS tape aesthetic — slightly washed colour, faint scan lines, soft edges. "
-        "Colour grade: faded, slightly green-shifted. Camera is handheld and casual. "
-        "Intimate domestic setting implied. Imperfection is the aesthetic."
-    ),
-    "Hyper-real 4K — clinical sharpness": (
-        "STYLE: Hyper-real 4K. Clinical sharpness — every texture, pore, and fibre rendered in full detail. "
-        "Even lighting, no blown highlights, no crushed blacks. "
-        "Camera movement is minimal and precise. The image is almost uncomfortably detailed."
-    ),
-    "Gritty realism — flat, natural light": (
-        "STYLE: Gritty realism. Flat colour grade, no cinematic enhancement. Natural light only — "
-        "whatever is available in the location. Camera is direct and unsentimental. "
-        "No stylisation. The scene is shot as if it is actually happening."
-    ),
-    "POV — first person, immersive": (
-        "STYLE: First-person POV. The camera IS the viewer's eyes. "
-        "Frame moves as a head would — natural breathing movement, slight tilt on turns. "
-        "Everything is seen, not watched. Close physical detail — hands, surfaces, faces at speaking distance."
-    ),
-    "Amateur — naturalistic, raw": (
-        "STYLE: Amateur home video aesthetic. Slightly overexposed. Natural indoor lighting — lamps, overhead. "
-        "Camera is handheld and slightly uncertain. No cinematic framing. "
-        "Colour: ungraded, as-shot. The imperfection is intentional."
-    ),
-    "Anime — Japanese animation": (
-        "STYLE: Japanese anime. Hand-drawn animation aesthetic — clean ink outlines, flat colour fills with "
-        "subtle cel shading. Large expressive eyes, stylised facial features. "
-        "Colour palette: vivid, high saturation with strong accent colours. "
-        "Motion: fluid on key poses, held on reaction shots. "
-        "Render every subject in this style regardless of what was described."
-    ),
-    "2D cartoon — hand-drawn": (
-        "STYLE: Classic hand-drawn 2D cartoon. Expressive ink outlines with variable line weight. "
-        "Flat colour fills, minimal shading, bold colour palette. "
-        "Movement uses squash-and-stretch. Background art is simplified and stylised, never photorealistic. "
-        "Render every subject in this style regardless of what was described."
-    ),
-    "3D CGI — Pixar/DreamWorks": (
-        "STYLE: High-end 3D CGI animation in the style of Pixar or DreamWorks. "
-        "Subsurface scattering on skin and organic surfaces. Highly detailed surface textures. "
-        "Warm, soft three-point lighting with gentle shadows. "
-        "Camera: smooth cinematic moves — slow push-ins, arcing lateral tracks. "
-        "Colour grade: warm, slightly saturated, storybook palette. "
-        "Render every subject in this style regardless of what was described."
-    ),
-    "Sci-fi — cinematic, practical": (
-        "STYLE: Cinematic science fiction. Clean, practical-feeling environments — metal corridors, "
-        "reinforced glass, industrial lighting rigs. Colour palette: cool blue-white with accent LEDs. "
-        "No fantasy or magic — everything looks functional and built. "
-        "Camera: wide establishing shots then close on faces or hands for intimacy. Lens flare on light sources."
-    ),
-    "Cyberpunk neon illustrated": (
-        "STYLE: Cyberpunk illustrated. Neon-lit urban environment — magenta, cyan, electric blue, acid green. "
-        "Hard rim lighting from neon signs carves subjects out of near-total darkness. "
-        "Rain-slick surfaces reflect light in pools and streaks. "
-        "Camera: low angles, wide lenses, dramatic fog and haze."
-    ),
-    "Comic book / graphic novel": (
-        "STYLE: Comic book or graphic novel. Bold ink outlines, halftone dot patterns in shadow areas. "
-        "Colour is flat with hard-edged shadows. Speed lines radiate from points of impact. "
-        "Camera moves like a comic panel transition — hard cuts between angles, no smooth motion blur. "
-        "Render every subject in this style regardless of what was described."
-    ),
-    "Erotic cinema — tasteful, cinematic": (
-        "STYLE: Tasteful erotic cinema. Warm, intimate lighting — practical sources only. "
-        "Shallow depth of field. Camera moves slowly and deliberately. "
-        "Colour grade: warm skin tones, soft highlights. "
-        "Sensual but not pornographic — implication over explicit detail. Slow, breathing pace. "
-        "Describe only what was asked for — the style wraps it, it does not expand it."
-    ),
-    "Explicit — direct, anatomical": (
-        "STYLE: Explicit adult content. Direct lighting — bodies clearly lit with no flattering shadow. "
-        "Camera is close and functional — shows exactly what is happening without cinematic softening. "
-        "No romantic framing. Blunt and specific. Anatomical language used directly. "
-        "Describe only what the user requested. Do not add acts or nudity the user did not write."
-    ),
-    "Voyeur — handheld, observational": (
-        "STYLE: Voyeuristic. The camera is a person — someone who found this moment and is trying not to be noticed. "
-        "The camera bobs and drifts with the natural sway of someone standing. "
-        "The motion is involuntary — slight vertical bounce, gentle lateral drift, micro-rotations. "
-        "The camera NEVER repositions to get a better angle. Natural available light only — no fill, no flash. "
-        "The subject is unaware. The camera does not announce itself."
-    ),
-    "Softcore editorial — lingerie-adjacent": (
-        "STYLE: Softcore editorial. Fashion-magazine aesthetic. Clean, even lighting. "
-        "Colour grade: warm neutrals and soft pastels. "
-        "Camera is composed — lingerie-level sensuality, no explicit content. Movement is slow and posed. "
-        "Do NOT add undressing, nudity, or intimate acts the user did not ask for."
-    ),
-    "Gravure Idol — Japanese glamour": (
-        "STYLE: Japanese gravure idol photoshoot / glamour video. "
-        "Bright, glossy, commercial magazine aesthetic. "
-        "High-key natural daylight or clean studio lighting with strong rim light and soft reflector fill. "
-        "Vivid yet smooth skin tones, slightly increased saturation, polished and flattering look. "
-        "Posing is intentional, playful and seductive: arched back, teasing eye contact. "
-        "Camera movement: slow body pan, lingering holds, slow tilt up, push-in as she makes eye contact. "
-        "Mood is cute-provocative: youthful charm combined with fan-service energy."
-    ),
-    "Femdom — verbal domination": (
-        "STYLE: Femdom verbal domination. She is the only power in the room. "
-        "Camera worships her — low angle looking up, slow orbital arc, close-up on her expression of contempt. "
-        "Hard directional lighting — one side of her face in clean harsh light, one in shadow. "
-        "Her voice is the dominant sound — every consonant audible. "
-        "FORBIDDEN: softness, uncertainty, the dominant losing composure."
-    ),
-    "Portrait vertical — 9:16 mobile": (
-        "STYLE: Native portrait video, 9:16 aspect ratio. Optimised for mobile — TikTok, Reels, Shorts. "
-        "Frame is vertical throughout. Tight head-to-torso framing. "
-        "Action moves vertically in frame. Camera stays close. No wide horizontal composition."
-    ),
-    "Selfie — self-shot, arm's length": (
-        "STYLE: Self-shot selfie video. The subject is holding the camera themselves — "
-        "outstretched arm, camera facing back at them. 9:16 vertical frame. "
-        "Tight head-and-shoulders framing. Camera bobs as they move, tilts when they turn their head. "
-        "FORBIDDEN: tripod stillness, gimbal smoothness, rack focus, dolly, crane. "
-        "Colour: clean and bright, natural available light, no cinematic grade."
-    ),
-    # ── Add your own presets below this line ─────────────────────────────────
-}
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        log.error("[PromptWriter] Error reading config: %s. Using defaults.", e)
+        return {
+            "VISION_MODELS": VISION_MODELS,
+            "TEXT_ONLY_SYSTEM_PROMPT": TEXT_ONLY_SYSTEM_PROMPT,
+            "VISION_SYSTEM_PROMPT": VISION_SYSTEM_PROMPT,
+            "STYLE_PRESETS": STYLE_PRESETS,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -471,11 +286,8 @@ def _describe_image_gguf_sync(
     else:
         log.info("[PromptWriter] GGUF text-only mode (no mmproj — image not analysed)")
         # Compact prompt for text-only: avoids triggering long reasoning chains
-        textonly_prompt = (
-            "/no_think\n"
-            "Write a cinematic scene description of 100-130 words for LTX-Video 2.3.\n"
-            "Present tense. Include subjects, environment, lighting, camera angle and movement.\n"
-            "Output ONLY the description, no titles, no analysis, no preamble.\n\n"
+        textonly_prompt = get_config().get(
+            "TEXT_ONLY_SYSTEM_PROMPT", TEXT_ONLY_SYSTEM_PROMPT
         )
         if user_text:
             # Append context/style lines from the original prompt (skip the verbose system block)
@@ -490,6 +302,8 @@ def _describe_image_gguf_sync(
             if extra:
                 textonly_prompt += "\n".join(extra)
         messages = [system_msg, {"role": "user", "content": textonly_prompt}]
+
+        log.info("[PromptWriter] Using Prompt:\n%s", messages)
 
         # ---> ENABLE STREAMING TO ALLOW INTERRUPTS <---
         import comfy.model_management as mm
@@ -636,29 +450,35 @@ def _build_user_text(
     segment_hint: str = "",
     has_image: bool = True,
 ) -> str:
+    # Load settings from dynamic config
+    config = get_config()
+    system_prompt = config.get("VISION_SYSTEM_PROMPT", VISION_SYSTEM_PROMPT)
+    style_presets = config.get("STYLE_PRESETS", STYLE_PRESETS)
+
     if has_image:
-        text = VISION_SYSTEM_PROMPT
+        text = system_prompt
     else:
-        text = VISION_SYSTEM_PROMPT.replace(
+        text = system_prompt.replace(
             "Analyze the image and write", "Expand the provided concept into"
         )
-        text += f"\n\nConcept to expand: {segment_hint if segment_hint else 'A cinematic scene'}"
-        segment_hint = ""  # Clear so it isn't duplicated
-    if global_context.strip():
-        text += f"\n\nGlobal scene context provided by the director: {global_context.strip()}"
-    if segment_hint.strip():
-        text += f"\n\nSpecific instruction for this scene: {segment_hint.strip()}"
-
+        # text += f"\n\nConcept to expand: {segment_hint if segment_hint else 'A cinematic scene'}"
+        # segment_hint = ""  # Clear so it isn't duplicated
     # Full style preset text (from STYLE_PRESETS dict) takes priority
-    preset_text = STYLE_PRESETS.get(style_preset, "")
+    preset_text = style_presets.get(style_preset, "")
     if preset_text:
-        text += f"\n\n{preset_text}"
+        text += f"\n\nUse this in your prompt:\n{preset_text}"
     elif style_preset and style_preset != _NONE_STYLE:
         # Unknown preset label — fall back to generic directive
-        text += f"\n\nVisual style: {style_preset}"
+        text += f"\n\nUse this in your prompt:\nVisual style: {style_preset}"
+
+    if global_context.strip():
+        text += f"\n\nGlobal scene context provided by the director: {global_context.strip()}"
+
+    if segment_hint.strip():
+        text += f"\n\nSPECIFIC INSTRUCTION for this scene: {segment_hint.strip()}\n\n"
 
     # Additional per-shot directives
-    extra_lines = []
+    extra_lines = ["\n\nShot directives — incorporate these:\n"]
     if shot_angle and shot_angle != _NONE_STYLE:
         extra_lines.append(f"- Shot angle: {shot_angle}")
     if camera_move and camera_move != _NONE_STYLE:
@@ -666,7 +486,7 @@ def _build_user_text(
     if style_extra.strip():
         extra_lines.append(f"- Additional: {style_extra.strip()}")
     if extra_lines:
-        text += "\n\nShot directives — incorporate these:\n" + "\n".join(extra_lines)
+        text += "\n".join(extra_lines)
     return text
 
 
@@ -727,6 +547,8 @@ def _describe_image_sync(
     text = processor.apply_chat_template(
         messages, tokenize=False, add_generation_prompt=True
     )
+
+    log.info("[PromptWriter] Using Prompt:\n%s", messages)
 
     try:
         from qwen_vl_utils import process_vision_info
@@ -862,7 +684,11 @@ async def handle_generate_prompts(request):
     style_extra = body.get("style_extra", "")
     mmproj_path = body.get("mmproj_path", "")
 
-    model_id = VISION_MODELS.get(model_name, VISION_MODELS["Qwen2.5-VL-3B — Fast"])
+    model_id = (
+        get_config()
+        .get("VISION_MODELS", VISION_MODELS)
+        .get(model_name, VISION_MODELS["Qwen2.5-VL-3B — Fast"])
+    )
 
     loop = asyncio.get_event_loop()
     prompts: list[str] = []
@@ -874,9 +700,15 @@ async def handle_generate_prompts(request):
             log.info("[PromptWriter] Prompt generation aborted by user.")
             break
 
+        segment_prompt = seg.get("prompt", "").strip()
+
+        # ---> IGNORE NON-TARGETS IMMEDIATELY <---
+        if seg.get("skip", False):
+            prompts.append(segment_prompt)
+            continue
+
         tensor = _load_image_tensor_from_seg(seg)
         segment_hint = seg.get("hint", "").strip()
-        segment_prompt = seg.get("prompt", "").strip()
 
         if tensor is None:
             # If no image/video frame, check if there's text/hint to expand instead
@@ -930,7 +762,9 @@ async def handle_style_presets(request):
     """Return the list of available style preset names (for the JS dropdown)."""
     from aiohttp import web
 
-    return web.json_response({"presets": list(STYLE_PRESETS.keys())})
+    return web.json_response(
+        {"presets": list(get_config().get("STYLE_PRESETS", STYLE_PRESETS).keys())}
+    )
 
 
 def register_routes() -> None:
