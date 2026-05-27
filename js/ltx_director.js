@@ -21,6 +21,7 @@ import {
 import { ICONS }                        from "./icons.js";
 import { hideWidget }                   from "./helpers.js";
 import { _getVlmConfig, _setVlmConfig } from "./vlm_prompt.js";
+import { THEME }                        from "./colors.js";
 
 if (!document.getElementById("prompt-relay-styles")) {
     const styleEl = document.createElement("style");
@@ -934,552 +935,6 @@ class TimelineEditor {
     _clearGhostState() {
         this._ghostSegmentId = this._ghostTrack = this._ghostInitialTimeline = this._previewSegments = null;
     }
-
-    //
-    // createDOM() {
-    //     console.log(PluginName, "Creating Dom")
-    //     // --- Full Panel Loading Overlay ---
-    //     this.wrapper = document.createElement("div");
-    //     this.wrapper.className = "pr-wrapper";
-    //     this.wrapper.style.position = "relative"; // Ensure it can contain absolute elements
-    //
-    //     // --- Full Panel Loading Overlay ---
-    //     this.loadingOverlay = document.createElement("div");
-    //     this.loadingOverlay.className = "pr-overlay";
-    //     this.loadingOverlay.innerHTML = `
-    //                 <div class="pr-spinner"></div>
-    //                 <div>✨ Analyzing scenes with Vision Model and writing prompts...</div>
-    //             `;
-    //
-    //     this.wrapper.appendChild(this.loadingOverlay);
-    //
-    //     this.wrapper.addEventListener("mouseenter", () => {
-    //         this._isHovering = true;
-    //     });
-    //     this.wrapper.addEventListener("mouseleave", () => {
-    //         this._isHovering = false;
-    //     });
-    //
-    //     this.handleKeyDown = (e) => {
-    //         const activeTag = document.activeElement ? document.activeElement.tagName : "";
-    //         if (activeTag === "INPUT" || activeTag === "TEXTAREA") return;
-    //
-    //         if ((e.key === "Delete" || e.key === "Backspace") && this.selectedIndex !== -1 && this._isHovering) {
-    //             this.deleteSelectedSegment();
-    //             e.stopPropagation();
-    //             e.stopImmediatePropagation();
-    //             e.preventDefault();
-    //         } else if ((e.key === " " || e.code === "Space") && this._isHovering) {
-    //             this.togglePlay();
-    //             e.stopPropagation();
-    //             e.stopImmediatePropagation();
-    //             e.preventDefault();
-    //         }
-    //     };
-    //     window.addEventListener("keydown", this.handleKeyDown, true);
-    //
-    //     this.handlePaste = (e) => {
-    //         if (this._isHovering) {
-    //             const activeTag = document.activeElement ? document.activeElement.tagName : "";
-    //             if (activeTag === "INPUT" || activeTag === "TEXTAREA") return;
-    //
-    //             if (e.clipboardData && e.clipboardData.files && e.clipboardData.files.length > 0) {
-    //                 const imageFiles = Array.from(e.clipboardData.files).filter(f => f.type.startsWith("image/"));
-    //                 if (imageFiles.length > 0) {
-    //                     this.handleImageUpload(imageFiles, this.currentFrame);
-    //                     e.preventDefault();
-    //                     e.stopPropagation();
-    //                 }
-    //             }
-    //         }
-    //     };
-    //     window.addEventListener("paste", this.handlePaste, true);
-    //
-    //     this.fileInput = document.createElement("input");
-    //     this.fileInput.type = "file";
-    //     this.fileInput.accept = "image/*";
-    //     this.fileInput.multiple = true;
-    //     this.fileInput.style.display = "none";
-    //     this.fileInput.addEventListener("change", (e) => this.handleImageUpload(e.target.files));
-    //
-    //     this.audioFileInput = document.createElement("input");
-    //     this.audioFileInput.type = "file";
-    //     this.audioFileInput.accept = "audio/*";
-    //     this.audioFileInput.multiple = true;
-    //     this.audioFileInput.style.display = "none";
-    //     this.audioFileInput.addEventListener("change", (e) => this.handleAudioUpload(e.target.files));
-    //
-    //     this.videoFileInput = document.createElement("input");
-    //     this.videoFileInput.type = "file";
-    //     this.videoFileInput.accept = "video/*";
-    //     this.videoFileInput.multiple = true;
-    //     this.videoFileInput.style.display = "none";
-    //     this.videoFileInput.addEventListener("change", (e) => this.handleVideoUpload(e.target.files));
-    //
-    //     // --- Toolbar ---
-    //     const toolbar = document.createElement("div");
-    //     toolbar.className = "pr-toolbar";
-    //
-    //     const actionGroup = this._buildActionGroup();
-    //     actionGroup.appendChild(this.fileInput);
-    //     actionGroup.appendChild(this.audioFileInput);
-    //     actionGroup.appendChild(this.videoFileInput);
-    //
-    //     toolbar.appendChild(actionGroup);
-    //
-    //     const rightGroup = document.createElement("div");
-    //     rightGroup.className = "pr-right-group";
-    //
-    //     this.segmentBoundsDisplay = document.createElement("div");
-    //     this.segmentBoundsDisplay.className = "pr-segment-bounds";
-    //     this.segmentBoundsDisplay.textContent = "Start: - | End: -";
-    //
-    //     this.timeCodeDisplay = document.createElement("div");
-    //     this.timeCodeDisplay.className = "pr-timecode";
-    //     this.timeCodeDisplay.textContent = this.formatTime(0);
-    //
-    //     const settingsBtn = document.createElement("button");
-    //     settingsBtn.className = "pr-btn pr-settings-btn";
-    //     settingsBtn.innerHTML = ICONS.gear;
-    //     settingsBtn.title = "Settings";
-    //     settingsBtn.addEventListener("click", (e) => {
-    //         e.stopPropagation();
-    //         if (this._settingsMenu) {
-    //             this.dismissSettingsMenu();
-    //         } else {
-    //             this.showSettingsMenu(settingsBtn);
-    //         }
-    //     });
-    //
-    //     const btnGroup = document.createElement("div");
-    //     btnGroup.className = "pr-btn-group"
-    //
-    //     // btnGroup.appendChild(toggleBtn);
-    //     btnGroup.appendChild(this._createAudioModeControl());
-    //     btnGroup.appendChild(this._createHelpButton());
-    //     btnGroup.appendChild(settingsBtn);
-    //
-    //     rightGroup.appendChild(btnGroup);
-    //
-    //     toolbar.appendChild(rightGroup);
-    //
-    //     // --- Canvas & Viewport ---
-    //     this.viewport = document.createElement("div");
-    //     this.viewport.className = "pr-timeline-viewport";
-    //
-    //     this.viewport.addEventListener("wheel", (e) => {
-    //         if (e.ctrlKey || e.metaKey) {
-    //             e.preventDefault();
-    //             e.stopPropagation();
-    //
-    //             let zoomDelta = e.deltaY > 0 ? -0.5 : 0.5;
-    //             this.zoomLevel = Math.max(1, Math.min(this.getMaxZoom(), this.zoomLevel + zoomDelta));
-    //             if (this.zoomSlider) this.zoomSlider.value = this.zoomLevel;
-    //
-    //             const oldWidth = this.canvas.offsetWidth;
-    //             const newWidth = this.viewport.clientWidth * this.zoomLevel;
-    //             const mouseX = e.clientX - this.viewport.getBoundingClientRect().left;
-    //             const scrollRatio = (this.viewport.scrollLeft + mouseX) / oldWidth;
-    //
-    //             this.canvas.style.width = newWidth + "px";
-    //             this.viewport.scrollLeft = scrollRatio * newWidth - mouseX;
-    //         }
-    //     }, {passive: false, capture: true});
-    //
-    //     this.canvas = document.createElement("canvas");
-    //     this.canvas.className = "pr-canvas";
-    //     this.ctx = this.canvas.getContext("2d");
-    //     this.canvas.style.width = "100%";
-    //
-    //     this.viewport.appendChild(this.canvas);
-    //
-    //     this.canvas.addEventListener("mousedown", (e) => this.onMouseDown(e));
-    //     this.canvas.addEventListener("contextmenu", (e) => this.onContextMenu(e));
-    //     this.canvas.style.height = `${CANVAS_HEIGHT}px`;
-    //
-    //     // --- Content Area Container ---
-    //     const propContainer = document.createElement("div");
-    //     propContainer.className = "pr-prop-container";
-    //
-    //     // --- Hint row (persists across generations — VLM instruction per segment) ---
-    //     const hintRow = document.createElement("div");
-    //     hintRow.className = "pr-hint-row";
-    //
-    //     const hintLabel = document.createElement("span");
-    //     hintLabel.className = "pr-hint-label";
-    //     hintLabel.textContent = "✨ Hint";
-    //     hintLabel.title = "Stays intact after generation. Guides each image differently (e.g. 'balletto', 'lotta').";
-    //
-    //     this.hintInput = document.createElement("input");
-    //     this.hintInput.type = "text";
-    //     this.hintInput.className = "pr-hint-input";
-    //     this.hintInput.placeholder = "scene hint for ✨ generation (e.g. balletto, lotta, slow sunset walk)…";
-    //     this.hintInput.addEventListener("input", () => {
-    //         if (this.selectionType === "image" && this.timeline.segments[this.selectedIndex]) {
-    //             this.timeline.segments[this.selectedIndex].hint = this.hintInput.value;
-    //             this.commitChanges();
-    //         }
-    //     });
-    //
-    //     hintRow.appendChild(hintLabel);
-    //     hintRow.appendChild(this.hintInput);
-    //
-    //     // --- Text Area (Image/Text) ---
-    //     this.promptInput = document.createElement("textarea");
-    //     this.promptInput.className = "pr-prompt-area";
-    //     this.promptInput.placeholder = "Generated prompt — edit freely. Fill ✨ Hint above to guide the next generation.";
-    //     this.promptInput.addEventListener("input", () => {
-    //         if (this.selectionType === "image" && this.timeline.segments[this.selectedIndex]) {
-    //             this.timeline.segments[this.selectedIndex].prompt = this.promptInput.value;
-    //             this.commitChanges();
-    //         }
-    //     });
-    //
-    //     // --- Audio Info Area ---
-    //     this.audioInfoArea = document.createElement("div");
-    //     this.audioInfoArea.className = "pr-audio-info";
-    //
-    //     propContainer.appendChild(hintRow);
-    //     propContainer.appendChild(this.promptInput);
-    //     propContainer.appendChild(this.audioInfoArea);
-    //
-    //     this.wrapper.addEventListener("dragover", (e) => {
-    //         e.preventDefault();
-    //         this.wrapper.classList.add("drag-active");
-    //
-    //         const {x, y} = this.getMousePos(e);
-    //         const logicalWidth = this.canvas.offsetWidth;
-    //         const totalFrames = this.getVisualDurationFrames();
-    //         if (!logicalWidth || totalFrames <= 0) return;
-    //
-    //         const isAudioTrack = y > RULER_HEIGHT + this.blockHeight;
-    //         const trackType = isAudioTrack ? "audio" : "image";
-    //         const arrToModify = isAudioTrack ? this.timeline.audioSegments : this.timeline.segments;
-    //
-    //         if (!this._ghostSegmentId || this._ghostTrack !== trackType) {
-    //             this._ghostSegmentId = "GHOST_" + Date.now();
-    //             this._ghostTrack = trackType;
-    //             this._ghostInitialTimeline = JSON.parse(JSON.stringify(arrToModify));
-    //
-    //             const frameRate = this.getFrameRate();
-    //             const newLength = Math.max(1, frameRate * 1);
-    //
-    //             let mouseFrameX = x * (totalFrames / logicalWidth);
-    //             let startFrame = clamp(Math.round(mouseFrameX - newLength / 2), 0, totalFrames - newLength);
-    //
-    //             this._ghostInitialTimeline.push({
-    //                 id: this._ghostSegmentId,
-    //                 start: startFrame,
-    //                 length: newLength,
-    //                 type: "ghost"
-    //             });
-    //         }
-    //
-    //         let mouseFrameX = x * (totalFrames / logicalWidth);
-    //         const ghost = this._ghostInitialTimeline.find(s => s.id === this._ghostSegmentId);
-    //         let D_mouse_start = mouseFrameX - ghost.length / 2;
-    //
-    //         this._previewSegments = this._applyCenterDragPhysics(
-    //             this._ghostInitialTimeline,
-    //             this._ghostSegmentId,
-    //             D_mouse_start,
-    //             mouseFrameX,
-    //             totalFrames,
-    //             totalFrames,
-    //             logicalWidth
-    //         );
-    //
-    //         for (let ps of this._previewSegments) {
-    //             const orig = arrToModify.find(s => s.id === ps.id);
-    //             if (orig) {
-    //                 ps.videoEl = orig.videoEl;
-    //                 ps.imgObj = orig.imgObj;
-    //                 if (orig.thumbnails) ps.thumbnails = orig.thumbnails;
-    //             }
-    //         }
-    //
-    //         this.render();
-    //     });
-    //
-    //     this.wrapper.addEventListener("dragleave", (e) => {
-    //         const rect = this.wrapper.getBoundingClientRect();
-    //         if (e.clientX < rect.left || e.clientX >= rect.right ||
-    //             e.clientY < rect.top || e.clientY >= rect.bottom) {
-    //             this.wrapper.classList.remove("drag-active");
-    //             this._ghostSegmentId = null;
-    //             this._ghostTrack = null;
-    //             this._ghostInitialTimeline = null;
-    //             this._previewSegments = null;
-    //             this.render();
-    //         }
-    //     });
-    //
-    //     this.wrapper.addEventListener("drop", (e) => {
-    //         e.preventDefault();
-    //         e.stopPropagation();
-    //         this.wrapper.classList.remove("drag-active");
-    //
-    //         let targetFrameStart = null;
-    //         let targetTrack = this._ghostTrack || "image";
-    //
-    //         if (this._ghostSegmentId && this._previewSegments) {
-    //             const ghost = this._previewSegments.find(s => s.id === this._ghostSegmentId);
-    //             if (ghost) {
-    //                 targetFrameStart = ghost.resolvedStart !== undefined ? ghost.resolvedStart : ghost.start;
-    //             }
-    //         }
-    //         this._ghostSegmentId = null;
-    //         this._ghostTrack = null;
-    //         this._ghostInitialTimeline = null;
-    //         this._previewSegments = null;
-    //         this.render();
-    //
-    //         if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-    //             const imageFiles = [];
-    //             const audioFiles = [];
-    //             const videoFiles = [];
-    //             for (let file of e.dataTransfer.files) {
-    //                 if (file.type.startsWith("video/")) videoFiles.push(file);
-    //                 else if (file.type.startsWith("audio/")) audioFiles.push(file);
-    //                 else if (file.type.startsWith("image/")) imageFiles.push(file);
-    //             }
-    //
-    //             // Let implicit intent handle mixing drops: use the track we hovered over
-    //             // for the first type we process, or fallback.
-    //             if (videoFiles.length > 0) {
-    //                 this.handleVideoUpload(videoFiles, targetFrameStart);
-    //             } else if (audioFiles.length > 0 && (targetTrack === "audio" || imageFiles.length === 0)) {
-    //                 this.handleAudioUpload(audioFiles, targetFrameStart);
-    //             } else if (imageFiles.length > 0) {
-    //                 this.handleImageUpload(imageFiles, targetFrameStart);
-    //             }
-    //         }
-    //     });
-    //
-    //     // Because these are anonymous functions, they cannot be targeted for removal. When a user deletes the LTXDirector node in ComfyUI, your destroy() method runs, but these listeners persist forever. Every time the node is deleted and added, a new set of ghost listeners is created, holding the entire TimelineEditor class (and all its canvases/images) in memory.
-    //     //
-    //     // Fix: Bind them to the class instance so they can be removed in destroy().
-    //
-    //     // window.addEventListener("mousemove", (e) => this.onMouseMove(e));
-    //     // window.addEventListener("mouseup", (e) => this.onMouseUp(e));
-    //     this._boundOnMouseMove = this.onMouseMove.bind(this);
-    //     this._boundOnMouseUp = this.onMouseUp.bind(this);
-    //     window.addEventListener("mousemove", this._boundOnMouseMove);
-    //     window.addEventListener("mouseup", this._boundOnMouseUp);
-    //
-    //     // --- Player Controls ---
-    //     const playerControls = document.createElement("div");
-    //     playerControls.className = "pr-player-controls";
-    //
-    //     this.playBtn = document.createElement("button");
-    //     this.playBtn.className = "pr-icon-btn";
-    //     this.playBtn.style.padding = "4px";
-    //     this.playBtn.innerHTML = ICONS.play;
-    //     this.playBtn.title = "Play/Pause Audio";
-    //     this.playBtn.addEventListener("click", () => this.togglePlay());
-    //
-    //     this.loopBtn = document.createElement("button");
-    //     this.loopBtn.className = "pr-icon-btn";
-    //     this.loopBtn.style.padding = "4px";
-    //     this.loopBtn.innerHTML = ICONS.loop;
-    //     this.loopBtn.title = "Toggle Loop";
-    //     this.loopBtn.addEventListener("click", () => this.toggleLoop());
-    //
-    //     this.seekBar = document.createElement("input");
-    //     this.seekBar.type = "range";
-    //     this.seekBar.className = "pr-seek-bar";
-    //     this.seekBar.min = "0";
-    //     this.seekBar.value = "0";
-    //     this.seekBar.style.flex = "1"; // take up remaining space
-    //     this.seekBar.addEventListener("input", (e) => {
-    //         this.currentFrame = parseInt(e.target.value, 10);
-    //         this.render();
-    //         if (this.isPlaying) {
-    //             this.playAudio();
-    //         }
-    //     });
-    //
-    //     // --- Zoom Controls ---
-    //     const zoomControls = document.createElement("div");
-    //     zoomControls.className = "pr-zoom-controls";
-    //
-    //     const zoomOutBtn = document.createElement("button");
-    //     zoomOutBtn.className = "pr-icon-btn";
-    //     zoomOutBtn.style.padding = "4px";
-    //     zoomOutBtn.innerHTML = ICONS.minus;
-    //     zoomOutBtn.title = "Zoom Out";
-    //     zoomOutBtn.addEventListener("click", () => {
-    //         const currentZoom = parseFloat(this.zoomSlider.value);
-    //         this.zoomSlider.value = Math.max(1, currentZoom - 0.5);
-    //         this.zoomSlider.dispatchEvent(new Event("input"));
-    //     });
-    //
-    //     this.zoomSlider = document.createElement("input");
-    //     this.zoomSlider.type = "range";
-    //     this.zoomSlider.className = "pr-zoom-slider";
-    //     this.zoomSlider.min = "1";
-    //     this.zoomSlider.max = "1"; // Updated dynamically via updateZoomSliderMax()
-    //     this.zoomSlider.step = "0.1";
-    //     this.zoomSlider.value = "1";
-    //     this.zoomSlider.title = "Zoom Level";
-    //     this.zoomSlider.addEventListener("input", (e) => {
-    //         this.zoomLevel = parseFloat(e.target.value);
-    //
-    //         const viewportWidth = this.viewport.clientWidth;
-    //         const newCanvasWidth = Math.max(viewportWidth, viewportWidth * this.zoomLevel);
-    //
-    //         this.canvas.style.width = newCanvasWidth + "px";
-    //         this.resizeCanvas(newCanvasWidth);
-    //         this._lastWidth = viewportWidth;
-    //         this._lastZoom = this.zoomLevel;
-    //
-    //         // Keep playhead centered
-    //         const totalFrames = this.getVisualDurationFrames();
-    //         const playheadRatio = this.currentFrame / totalFrames;
-    //         const newPlayheadX = playheadRatio * newCanvasWidth;
-    //         this.viewport.scrollLeft = newPlayheadX - (viewportWidth / 2);
-    //     });
-    //
-    //     const zoomInBtn = document.createElement("button");
-    //     zoomInBtn.className = "pr-icon-btn";
-    //     zoomInBtn.style.padding = "4px";
-    //     zoomInBtn.innerHTML = ICONS.plus;
-    //     zoomInBtn.title = "Zoom In";
-    //     zoomInBtn.addEventListener("click", () => {
-    //         const currentZoom = parseFloat(this.zoomSlider.value);
-    //         this.zoomSlider.value = Math.min(this.getMaxZoom(), currentZoom + 0.5);
-    //         this.zoomSlider.dispatchEvent(new Event("input"));
-    //     });
-    //
-    //     const zoomFitBtn = document.createElement("button");
-    //     zoomFitBtn.className = "pr-icon-btn";
-    //     zoomFitBtn.style.padding = "4px";
-    //     zoomFitBtn.style.marginLeft = "4px";
-    //     zoomFitBtn.innerHTML = ICONS.fit;
-    //     zoomFitBtn.title = "Zoom to Fit (show full timeline)";
-    //     zoomFitBtn.addEventListener("click", () => {
-    //         this.zoomLevel = 1;
-    //         this.zoomSlider.value = 1;
-    //         const viewportWidth = this.viewport.clientWidth;
-    //         this.canvas.style.width = viewportWidth + "px";
-    //         this.resizeCanvas(viewportWidth);
-    //         this._lastWidth = viewportWidth;
-    //         this._lastZoom = 1;
-    //         this.viewport.scrollLeft = 0;
-    //     });
-    //
-    //     zoomControls.appendChild(zoomOutBtn);
-    //     zoomControls.appendChild(this.zoomSlider);
-    //     zoomControls.appendChild(zoomInBtn);
-    //     zoomControls.appendChild(zoomFitBtn);
-    //
-    //     playerControls.appendChild(this.playBtn);
-    //     playerControls.appendChild(this.loopBtn);
-    //     playerControls.appendChild(this.seekBar);
-    //     playerControls.appendChild(zoomControls);
-    //
-    //
-    //     // --- Guide Strength Slider ---
-    //     this.strengthRow = document.createElement("div");
-    //     this.strengthRow.className = "pr-strength-row";
-    //
-    //     const strengthLabel = document.createElement("span");
-    //     strengthLabel.className = "pr-strength-label";
-    //     strengthLabel.textContent = "Guide Strength:";
-    //
-    //     this.strengthValue = document.createElement("input");
-    //     this.strengthValue.type = "text";
-    //     this.strengthValue.className = "pr-strength-input";
-    //     this.strengthValue.value = "1.00";
-    //     this.strengthValue.disabled = true;
-    //     this.strengthValue.style.cursor = "ew-resize";
-    //
-    //     // Dragging logic for guide strength
-    //     let isDragging = false;
-    //     let startX = 0;
-    //     let startVal = 0;
-    //     let hasMoved = false;
-    //
-    //     this.strengthValue.addEventListener("mousedown", (e) => {
-    //         if (this.strengthValue.disabled) return;
-    //         startX = e.clientX;
-    //         startVal = parseFloat(this.strengthValue.value) || 1.0;
-    //         hasMoved = false;
-    //
-    //         const onMouseMove = (moveEvent) => {
-    //             const deltaX = moveEvent.clientX - startX;
-    //             if (Math.abs(deltaX) > 3) {
-    //                 hasMoved = true;
-    //                 isDragging = true;
-    //             }
-    //
-    //             if (isDragging) {
-    //                 moveEvent.preventDefault();
-    //                 const sensitivity = 0.002;
-    //                 let newVal = startVal + deltaX * sensitivity;
-    //
-    //                 if (newVal < 0) newVal = 0;
-    //                 if (newVal > 1) newVal = 1;
-    //
-    //                 this.strengthValue.value = newVal.toFixed(2);
-    //
-    //                 if (this.selectionType === "image" && this.timeline.segments[this.selectedIndex]) {
-    //                     const seg = this.timeline.segments[this.selectedIndex];
-    //                     if (seg.type !== "text") {
-    //                         seg.guideStrength = newVal;
-    //                         this.commitChanges();
-    //                     }
-    //                 }
-    //             }
-    //         };
-    //
-    //         const onMouseUp = () => {
-    //             document.removeEventListener("mousemove", onMouseMove);
-    //             document.removeEventListener("mouseup", onMouseUp);
-    //
-    //             if (!hasMoved) {
-    //                 this.strengthValue.focus();
-    //                 this.strengthValue.select();
-    //             }
-    //             isDragging = false;
-    //         };
-    //
-    //         document.addEventListener("mousemove", onMouseMove);
-    //         document.addEventListener("mouseup", onMouseUp);
-    //     });
-    //
-    //     this.strengthValue.addEventListener("change", (e) => {
-    //         let val = parseFloat(e.target.value);
-    //         if (isNaN(val)) val = 1;
-    //         val = Math.max(0, Math.min(1, val));
-    //         this.strengthValue.value = val.toFixed(2);
-    //         if (this.selectionType === "image" && this.timeline.segments[this.selectedIndex]) {
-    //             const seg = this.timeline.segments[this.selectedIndex];
-    //             if (seg.type !== "text") {
-    //                 seg.guideStrength = val;
-    //                 this.commitChanges();
-    //             }
-    //         }
-    //     });
-    //
-    //     this.strengthRow.appendChild(this.timeCodeDisplay);
-    //     this.strengthRow.appendChild(this.segmentBoundsDisplay);
-    //     this.strengthRow.appendChild(strengthLabel);
-    //     this.strengthRow.appendChild(this.strengthValue);
-    //
-    //     this.wrapper.appendChild(toolbar);
-    //     this.wrapper.appendChild(this.viewport);
-    //
-    //     const controlsGroup = document.createElement("div");
-    //     controlsGroup.className = "pr-controls-group";
-    //     controlsGroup.appendChild(this.strengthRow);
-    //     controlsGroup.appendChild(playerControls);
-    //     this.wrapper.appendChild(controlsGroup);
-    //     this.wrapper.appendChild(propContainer);
-    //
-    //     this.container.appendChild(this.wrapper);
-    // }
-    //
 
     _createAudioModeControl() {
         const audioModeWrapper = document.createElement("div");
@@ -2700,7 +2155,7 @@ class TimelineEditor {
                 this.ctx.shadowBlur = 0;
                 this.ctx.drawImage(vid, drawX, drawY, pw, ph);
 
-                this.ctx.fillStyle = "rgba(0,0,0,0.75)";
+                this.ctx.fillStyle = THEME.fillStyle;
                 this.ctx.fillRect(drawX, drawY + ph - 20, pw, 20);
                 this.ctx.fillStyle = "#38BDF8";
                 this.ctx.font = "bold 11px sans-serif";
@@ -4515,18 +3970,32 @@ class TimelineEditor {
                 if (this.loadingOverlay) {
                     // 2. Add an Abort button to the overlay UI
                     this.loadingOverlay.innerHTML = `
-                               <div class="pr-spinner"></div>
-                               <div style="margin-bottom: 12px;">✨ Analyzing ${targetCount} clip${targetCount > 1 ? 's' : ''} with Vision Model...</div>
-                               <button id="pr-abort-btn" class="pr-btn pr-btn-danger">Cancel</button>
-                           `;
+                                  <div class="pr-spinner"></div>
+                                  <div style="margin-bottom: 12px;">✨ Analyzing ${targetCount} clip${targetCount > 1 ? 's' : ''} with Vision Model...</div>
+                                  <button id="pr-abort-btn" class="pr-btn pr-btn-danger">Cancel</button>
+                              `;
                     this.loadingOverlay.style.display = "flex";
 
                     // 3. Attach a click event to trigger the abort
                     const abortBtn = this.loadingOverlay.querySelector("#pr-abort-btn");
                     if (abortBtn) {
-                        abortBtn.addEventListener("click", () => {
+                        abortBtn.addEventListener("click", async () => {
+                            // A) Stop the frontend from waiting
                             if (this._promptAbortController) {
                                 this._promptAbortController.abort();
+                            }
+
+                            // B) Actively tell the backend server to stop generating
+                            try {
+                                // If you are in ComfyUI, trigger the global interrupt:
+                                if (window.api && typeof window.api.interrupt === "function") {
+                                    await window.api.interrupt();
+                                } else {
+                                    // Or call your own custom endpoint if you made one:
+                                    // await api.fetchApi("/whatdreamscost/cancel_prompts", { method: "POST" });
+                                }
+                            } catch (err) {
+                                console.error("Failed to interrupt backend:", err);
                             }
                         });
                     }
@@ -4557,6 +4026,7 @@ class TimelineEditor {
                         hint: s.hint || "",
                         prompt: s.prompt || "",
                         type: isTarget ? (s.type || "image") : "text",
+                        skip: !isTarget // <--- Tell python to completely skip this one
                     };
                 }),
                 global_prompt: globalPrompt,
@@ -4870,11 +4340,14 @@ try {
 
                     for (const [name, def] of APPENDED_WIDGET_DEFAULTS) {
                         if (!this.widgets?.find(w => w.name === name)) {
+                            // Fix 1: Add {} as the 5th argument
                             this.addWidget("string", name, def, () => {
-                            });
+                            }, {});
                         }
                     }
                     for (const w of this.widgets) {
+                        // Fix 2: Guarantee options exists on all widgets
+                        if (!w.options) w.options = {};
                         if (HIDDEN_WIDGET_NAMES.includes(w.name)) hideWidget(w);
                     }
 
@@ -4887,16 +4360,16 @@ try {
                         compWidget.value = 18;
                     }
                     // Hide global prompt by default on creation without destroying its DOM element
-                    const globalPromptWidget = this.widgets?.find(w => w.name === "global_prompt");
-                    if (globalPromptWidget) {
-                        if (!globalPromptWidget.options) globalPromptWidget.options = {};
-                        globalPromptWidget.options.hidden = true;
-                        globalPromptWidget.hidden = true;
-                        globalPromptWidget.computeSize = () => [0, 0];
-                        setTimeout(() => {
-                            if (globalPromptWidget.element) globalPromptWidget.element.style.display = "none";
-                        }, 0);
-                    }
+                    // const globalPromptWidget = this.widgets?.find(w => w.name === "global_prompt");
+                    // if (globalPromptWidget) {
+                    //     if (!globalPromptWidget.options) globalPromptWidget.options = {};
+                    //     globalPromptWidget.options.hidden = true;
+                    //     globalPromptWidget.hidden = true;
+                    //     globalPromptWidget.computeSize = () => [0, 0];
+                    //     setTimeout(() => {
+                    //         if (globalPromptWidget.element) globalPromptWidget.element.style.display = "none";
+                    //     }, 0);
+                    // }
 
                     const container = document.createElement("div");
                     const widget = this.addDOMWidget("timeline_ui", "timeline_ui", container, {
@@ -4904,7 +4377,8 @@ try {
                         setValue: () => {
                         },
                     });
-
+                    widget.value = "";
+                    widget.origVals = {};
                     widget.computeSize = function (width) {
                         const canvasH = self._timelineEditor ? self._timelineEditor.canvasHeight : CANVAS_HEIGHT;
                         return [width, canvasH + 235];
